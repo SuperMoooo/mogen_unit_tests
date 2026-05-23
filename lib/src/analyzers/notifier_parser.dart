@@ -11,22 +11,22 @@ import '../models/notifier_info.dart';
 
 /// Parses a notifier source file and returns all [NotifierInfo] found.
 class NotifierParser {
-  /// Creates a parser using the project root and package name.
-  const NotifierParser({required this.projectRoot, required this.packageName});
+  /// Creates a new [NotifierParser].
+  const NotifierParser({
+    required this.projectRoot,
+    required this.packageName,
+  });
 
-  /// Absolute path to the project root.
+  /// The root directory of the Flutter project.
   final String projectRoot;
 
-  /// Package name used to generate `package:` import paths.
+  /// The package name of the project.
   final String packageName;
 
-  /// Parses [filePath] and returns all discovered notifiers.
+  /// Parse all [filePaths] and return every [NotifierInfo] found.
   List<NotifierInfo> parse(String filePath) {
     final content = File(filePath).readAsStringSync();
-    final result = parseString(
-      content: content,
-      path: filePath,
-    );
+    final result = parseString(content: content, path: filePath);
 
     final visitor = _NotifierVisitor(
       filePath: filePath,
@@ -82,18 +82,20 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
 
     for (final member in node.members) {
       if (member is! MethodDeclaration) continue;
-      final name = member.name.lexeme;
-      if (name.startsWith('_')) continue;
+      // analyzer >=8 removed .name, use .name2; >=10 removed .name2, use .name
+      // We use a try/both approach via the token's lexeme which is stable.
+      final memberName = member.name.lexeme;
+      if (memberName.startsWith('_')) continue;
 
       final info = MethodInfo(
-        name: name,
+        name: memberName,
         returnType: member.returnType?.toSource() ?? 'void',
         isAsync: _isAsync(member),
         params: _parseParams(member.parameters),
-        isBuild: name == 'build',
+        isBuild: memberName == 'build',
       );
 
-      if (name == 'build') {
+      if (memberName == 'build') {
         buildMethod = info;
       } else {
         methods.add(info);
@@ -139,12 +141,7 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
 
   List<ParamInfo> _parseParams(FormalParameterList? list) {
     if (list == null) return [];
-    final result = <ParamInfo>[];
-    for (final param in list.parameters) {
-      final info = _resolveParam(param);
-      if (info != null) result.add(info);
-    }
-    return result;
+    return list.parameters.map(_resolveParam).whereType<ParamInfo>().toList();
   }
 
   ParamInfo? _resolveParam(FormalParameter param) {
@@ -166,6 +163,9 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
     } else if (param is FieldFormalParameter) {
       name = param.name.lexeme;
       type = param.type?.toSource() ?? 'dynamic';
+    } else if (param is SuperFormalParameter) {
+      name = param.name.lexeme;
+      type = param.type?.toSource() ?? 'dynamic';
     }
 
     if (name == null) return null;
@@ -180,8 +180,12 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
 
   bool _isAsync(MethodDeclaration m) {
     final body = m.body;
-    if (body is BlockFunctionBody) return body.keyword?.lexeme == 'async';
-    if (body is ExpressionFunctionBody) return body.keyword?.lexeme == 'async';
+    if (body is BlockFunctionBody) {
+      return body.keyword?.lexeme == 'async';
+    }
+    if (body is ExpressionFunctionBody) {
+      return body.keyword?.lexeme == 'async';
+    }
     return false;
   }
 

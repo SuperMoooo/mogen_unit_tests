@@ -9,18 +9,22 @@ import 'package:path/path.dart' as p;
 
 import '../models/notifier_info.dart';
 
-/// Parses state files and extracts field metadata for generated tests.
+/// Parses state files in `presentation/states/` and extracts field types
+/// so the generator can produce type-accurate mock data.
 class StateParser {
-  /// Creates a parser using the project root and package name.
-  const StateParser({required this.projectRoot, required this.packageName});
+  /// Creates a new [StateParser].
+  const StateParser({
+    required this.projectRoot,
+    required this.packageName,
+  });
 
-  /// Absolute path to the project root.
+  /// The root directory of the Flutter project.
   final String projectRoot;
-
-  /// Package name used to generate `package:` import paths.
+  
+  /// The package name of the project.
   final String packageName;
 
-  /// Parses [filePaths] and returns all discovered state models.
+  /// Parse all [filePaths] and return every [StateInfo] found.
   List<StateInfo> parseAll(List<String> filePaths) {
     final result = <StateInfo>[];
     for (final path in filePaths) {
@@ -44,7 +48,8 @@ class StateParser {
   String _toPackagePath(String filePath) {
     final libPath = p.join(projectRoot, 'lib');
     if (filePath.startsWith(libPath)) {
-      final rel = p.relative(filePath, from: libPath).replaceAll(r'\', '/');
+      final rel =
+          p.relative(filePath, from: libPath).replaceAll(r'\', '/');
       return 'package:$packageName/$rel';
     }
     return filePath;
@@ -70,8 +75,9 @@ class _StateVisitor extends RecursiveAstVisitor<void> {
         if (rawType == null) continue;
 
         final isNullable = rawType.endsWith('?');
-        final clean =
-            isNullable ? rawType.substring(0, rawType.length - 1) : rawType;
+        final clean = isNullable
+            ? rawType.substring(0, rawType.length - 1)
+            : rawType;
         final (isList, itemType) = _listInfo(clean);
 
         for (final v in member.fields.variables) {
@@ -86,7 +92,7 @@ class _StateVisitor extends RecursiveAstVisitor<void> {
       }
     }
 
-    // Also capture constructor params (Freezed / data classes).
+    // Also capture constructor params (covers Freezed / data classes).
     for (final member in node.members) {
       if (member is! ConstructorDeclaration) continue;
       for (final param in member.parameters.parameters) {
@@ -117,14 +123,18 @@ class _StateVisitor extends RecursiveAstVisitor<void> {
     } else if (param is FieldFormalParameter) {
       name = param.name.lexeme;
       rawType = param.type?.toSource();
+    } else if (param is SuperFormalParameter) {
+      name = param.name.lexeme;
+      rawType = param.type?.toSource();
     }
 
     if (name == null || rawType == null) return;
     if (fields.any((f) => f.name == name)) return;
 
     final isNullable = rawType.endsWith('?');
-    final clean =
-        isNullable ? rawType.substring(0, rawType.length - 1) : rawType;
+    final clean = isNullable
+        ? rawType.substring(0, rawType.length - 1)
+        : rawType;
     final (isList, itemType) = _listInfo(clean);
 
     fields.add(StateField(

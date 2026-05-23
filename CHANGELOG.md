@@ -1,6 +1,10 @@
-## [1.0.4]
+## [1.0.5]
+
+### Refactor
+
+- Notifier parser
+- State parser
 
 ### Added
 
-- repo import in tests
-- example file
+- platforms to pubspec.yaml
