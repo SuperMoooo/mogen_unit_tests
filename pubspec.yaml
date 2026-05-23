@@ -3,7 +3,7 @@ description: >
     CLI tool that scans lib/features/**/presentation/notifiers/, parses
     Riverpod AsyncNotifier / Notifier classes, detects repository dependencies,
     and generates Mocktail-based unit tests with success + error cases.
-version: 1.0.0
+version: 1.0.1
 homepage: https://supermoooo.github.io/Portfolio/
 repository: https://github.com/SuperMoooo/mogen_unit_tests
 

@@ -8,7 +8,7 @@ import 'package:mogen_unit_tests/mogen_unit_tests.dart';
 import 'package:path/path.dart' as p;
 import 'package:yaml/yaml.dart';
 
-const _version = '1.0.0';
+const _version = '1.0.1';
 
 Future<void> main(List<String> arguments) async {
   final parser = ArgParser()
@@ -160,7 +160,8 @@ void _printBanner() {
 
 void _printUsage(ArgParser parser) {
   print(
-      'mogen_unit_tests — generate Mocktail unit tests for Riverpod notifiers');
+    'mogen_unit_tests — generate Mocktail unit tests for Riverpod notifiers',
+  );
   print('');
   print('Usage: dart run mogen_unit_tests [options]');
   print('');

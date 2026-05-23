@@ -51,16 +51,7 @@ Add to your Flutter project's `pubspec.yaml` under `dev_dependencies`:
 
 ```yaml
 dev_dependencies:
-    mogen_unit_tests:
-        git:
-            url: https://github.com/SuperMoooo/mogen_unit_tests
-```
-
-Or, if published to pub.dev:
-
-```yaml
-dev_dependencies:
-    mogen_unit_tests: ^0.2.0
+    mogen_unit_tests: ^1.0.1
 ```
 
 Then run:
