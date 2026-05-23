@@ -1,5 +1,6 @@
-## [1.0.3]
+## [1.0.4]
 
-### Changed
+### Added
 
-- generated tests path
+- repo import in tests
+- example file
