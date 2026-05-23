@@ -2,7 +2,6 @@
 
 import 'dart:io';
 
-import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
@@ -10,17 +9,17 @@ import 'package:path/path.dart' as p;
 
 import '../models/notifier_info.dart';
 
+/// Parses a notifier source file and returns all [NotifierInfo] found.
 class NotifierParser {
+  const NotifierParser({required this.projectRoot, required this.packageName});
+
   final String projectRoot;
   final String packageName;
-
-  NotifierParser({required this.projectRoot, required this.packageName});
 
   List<NotifierInfo> parse(String filePath) {
     final content = File(filePath).readAsStringSync();
     final result = parseString(
       content: content,
-      featureSet: FeatureSet.latestLanguageVersion(),
       path: filePath,
     );
 
@@ -45,18 +44,16 @@ class NotifierParser {
 // ─── Visitor ────────────────────────────────────────────────────────────────
 
 class _NotifierVisitor extends RecursiveAstVisitor<void> {
+  _NotifierVisitor({required this.filePath, required this.importPath});
+
   final String filePath;
   final String importPath;
-
   final List<NotifierInfo> notifiers = [];
-
-  _NotifierVisitor({required this.filePath, required this.importPath});
 
   @override
   void visitClassDeclaration(ClassDeclaration node) {
     final superclassName = node.extendsClause?.superclass.toSource() ?? '';
 
-    // Match AsyncNotifier<T>, Notifier<T>, FamilyAsyncNotifier<T,A> etc.
     final isAsync = superclassName.contains('AsyncNotifier') ||
         superclassName.contains('AutoDisposeAsyncNotifier');
     final isNotifier = isAsync ||
@@ -65,21 +62,16 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
 
     if (!isNotifier) return;
 
-    // Extract <T> from AsyncNotifier<T>
     final stateType = _extractGeneric(superclassName);
 
-    // Collect repositories from ref.read() calls inside the class
     final repoVisitor = _RepoRefVisitor();
     node.visitChildren(repoVisitor);
     final repos = repoVisitor.repos;
 
-    // Also check field declarations for injected repos
-    final fieldRepos = _extractFieldRepos(node);
-    for (final fr in fieldRepos) {
+    for (final fr in _extractFieldRepos(node)) {
       if (!repos.any((r) => r.type == fr.type)) repos.add(fr);
     }
 
-    // Parse methods
     MethodInfo? buildMethod;
     final methods = <MethodInfo>[];
 
@@ -88,15 +80,11 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
       final name = member.name.lexeme;
       if (name.startsWith('_')) continue;
 
-      final returnType = member.returnType?.toSource() ?? 'void';
-      final isAsync = _isAsync(member);
-      final params = _parseParams(member.parameters);
-
       final info = MethodInfo(
         name: name,
-        returnType: returnType,
-        isAsync: isAsync,
-        params: params,
+        returnType: member.returnType?.toSource() ?? 'void',
+        isAsync: _isAsync(member),
+        params: _parseParams(member.parameters),
         isBuild: name == 'build',
       );
 
@@ -124,8 +112,7 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
     for (final member in node.members) {
       if (member is! FieldDeclaration) continue;
       final type = member.fields.type?.toSource();
-      if (type == null) continue;
-      if (!_looksLikeRepo(type)) continue;
+      if (type == null || !_looksLikeRepo(type)) continue;
       for (final v in member.fields.variables) {
         deps.add(RepositoryDep(
           type: type.replaceAll('?', '').trim(),
@@ -149,57 +136,52 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
     if (list == null) return [];
     final result = <ParamInfo>[];
     for (final param in list.parameters) {
-      String? name;
-      String type = 'dynamic';
-      bool isNamed = param.isNamed;
-      bool isNullable = false;
-      String? defaultValue;
-
-      if (param is SimpleFormalParameter) {
-        name = param.name?.lexeme;
-        type = param.type?.toSource() ?? 'dynamic';
-        isNullable = type.endsWith('?');
-      } else if (param is DefaultFormalParameter) {
-        defaultValue = param.defaultValue?.toSource();
-        final inner = param.parameter;
-        if (inner is SimpleFormalParameter) {
-          name = inner.name?.lexeme;
-          type = inner.type?.toSource() ?? 'dynamic';
-          isNullable = type.endsWith('?');
-        }
-      } else if (param is FieldFormalParameter) {
-        name = param.name.lexeme;
-        type = param.type?.toSource() ?? 'dynamic';
-      }
-
-      if (name != null) {
-        result.add(ParamInfo(
-          name: name,
-          type: type,
-          isNamed: isNamed,
-          isNullable: isNullable,
-          defaultValue: defaultValue,
-        ));
-      }
+      final info = _resolveParam(param);
+      if (info != null) result.add(info);
     }
     return result;
   }
 
+  ParamInfo? _resolveParam(FormalParameter param) {
+    String? name;
+    String type = 'dynamic';
+    final isNamed = param.isNamed;
+    String? defaultValue;
+
+    if (param is SimpleFormalParameter) {
+      name = param.name?.lexeme;
+      type = param.type?.toSource() ?? 'dynamic';
+    } else if (param is DefaultFormalParameter) {
+      defaultValue = param.defaultValue?.toSource();
+      final inner = param.parameter;
+      if (inner is SimpleFormalParameter) {
+        name = inner.name?.lexeme;
+        type = inner.type?.toSource() ?? 'dynamic';
+      }
+    } else if (param is FieldFormalParameter) {
+      name = param.name.lexeme;
+      type = param.type?.toSource() ?? 'dynamic';
+    }
+
+    if (name == null) return null;
+    return ParamInfo(
+      name: name,
+      type: type,
+      isNamed: isNamed,
+      isNullable: type.endsWith('?'),
+      defaultValue: defaultValue,
+    );
+  }
+
   bool _isAsync(MethodDeclaration m) {
     final body = m.body;
-    if (body is BlockFunctionBody) {
-      return body.keyword?.lexeme == 'async';
-    }
-    if (body is ExpressionFunctionBody) {
-      return body.keyword?.lexeme == 'async';
-    }
+    if (body is BlockFunctionBody) return body.keyword?.lexeme == 'async';
+    if (body is ExpressionFunctionBody) return body.keyword?.lexeme == 'async';
     return false;
   }
 
-  String? _extractGeneric(String type) {
-    final match = RegExp(r'<(.+)>').firstMatch(type);
-    return match?.group(1);
-  }
+  String? _extractGeneric(String type) =>
+      RegExp(r'<(.+)>').firstMatch(type)?.group(1);
 }
 
 // ─── Repo ref.read() Visitor ─────────────────────────────────────────────────
@@ -207,8 +189,6 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
 class _RepoRefVisitor extends RecursiveAstVisitor<void> {
   final List<RepositoryDep> repos = [];
 
-  // Matches: ref.read(cartRepositoryProvider)
-  // Matches: ref.watch(cartRepositoryProvider)
   @override
   void visitMethodInvocation(MethodInvocation node) {
     super.visitMethodInvocation(node);
@@ -223,8 +203,6 @@ class _RepoRefVisitor extends RecursiveAstVisitor<void> {
     if (args.isEmpty) return;
 
     final providerExpr = args.first.toSource();
-    // Try to infer type from provider name convention:
-    // cartRepositoryProvider → CartRepository
     final typeName = _providerToType(providerExpr);
     if (typeName == null) return;
     if (repos.any((r) => r.type == typeName)) return;
@@ -237,8 +215,6 @@ class _RepoRefVisitor extends RecursiveAstVisitor<void> {
   }
 
   String? _providerToType(String providerExpr) {
-    // cartRepositoryProvider → CartRepository
-    // authServiceProvider    → AuthService
     final cleaned = providerExpr.replaceAll(RegExp(r'\.notifier\b'), '').trim();
     final match = RegExp(r'^([a-z][a-zA-Z0-9]*)Provider').firstMatch(cleaned);
     if (match == null) return null;

@@ -46,8 +46,9 @@ Future<void> main(List<String> arguments) async {
   try {
     args = parser.parse(arguments);
   } on FormatException catch (e) {
-    stderr.writeln('Error: ${e.message}');
-    stderr.writeln();
+    stderr
+      ..writeln('Error: ${e.message}')
+      ..writeln();
     _printUsage(parser);
     exit(64);
   }
@@ -160,8 +161,7 @@ void _printBanner() {
 
 void _printUsage(ArgParser parser) {
   print(
-    'mogen_unit_tests — generate Mocktail unit tests for Riverpod notifiers',
-  );
+      'mogen_unit_tests — generate Mocktail unit tests for Riverpod notifiers');
   print('');
   print('Usage: dart run mogen_unit_tests [options]');
   print('');

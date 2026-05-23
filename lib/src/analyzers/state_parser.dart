@@ -2,7 +2,6 @@
 
 import 'dart:io';
 
-import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
@@ -10,32 +9,31 @@ import 'package:path/path.dart' as p;
 
 import '../models/notifier_info.dart';
 
+/// Parses state files in `presentation/states/` and extracts field types
+/// so the generator can produce type-accurate mock data.
 class StateParser {
+  const StateParser({required this.projectRoot, required this.packageName});
+
   final String projectRoot;
   final String packageName;
 
-  StateParser({required this.projectRoot, required this.packageName});
-
+  /// Parse all [filePaths] and return every [StateInfo] found.
   List<StateInfo> parseAll(List<String> filePaths) {
     final result = <StateInfo>[];
     for (final path in filePaths) {
       try {
         result.addAll(_parse(path));
-      } catch (_) {}
+      } catch (_) {
+        // Skip files that cannot be parsed.
+      }
     }
     return result;
   }
 
   List<StateInfo> _parse(String filePath) {
     final content = File(filePath).readAsStringSync();
-    final parsed = parseString(
-      content: content,
-      featureSet: FeatureSet.latestLanguageVersion(),
-      path: filePath,
-    );
-
-    final importPath = _toPackagePath(filePath);
-    final visitor = _StateVisitor(importPath: importPath);
+    final parsed = parseString(content: content, path: filePath);
+    final visitor = _StateVisitor(importPath: _toPackagePath(filePath));
     parsed.unit.visitChildren(visitor);
     return visitor.states;
   }
@@ -51,41 +49,41 @@ class StateParser {
 }
 
 class _StateVisitor extends RecursiveAstVisitor<void> {
+  _StateVisitor({required this.importPath});
+
   final String importPath;
   final List<StateInfo> states = [];
-
-  _StateVisitor({required this.importPath});
 
   @override
   void visitClassDeclaration(ClassDeclaration node) {
     final name = node.name.lexeme;
-    // Accept anything that looks state-like
     if (!_isState(name)) return;
 
     final fields = <StateField>[];
 
     for (final member in node.members) {
-      if (member is! FieldDeclaration) continue;
-      final rawType = member.fields.type?.toSource();
-      if (rawType == null) continue;
+      if (member is FieldDeclaration) {
+        final rawType = member.fields.type?.toSource();
+        if (rawType == null) continue;
 
-      final isNullable = rawType.endsWith('?');
-      final clean =
-          isNullable ? rawType.substring(0, rawType.length - 1) : rawType;
-      final (isList, itemType) = _listInfo(clean);
+        final isNullable = rawType.endsWith('?');
+        final clean =
+            isNullable ? rawType.substring(0, rawType.length - 1) : rawType;
+        final (isList, itemType) = _listInfo(clean);
 
-      for (final v in member.fields.variables) {
-        fields.add(StateField(
-          name: v.name.lexeme,
-          type: clean,
-          isNullable: isNullable,
-          isList: isList,
-          listItemType: itemType,
-        ));
+        for (final v in member.fields.variables) {
+          fields.add(StateField(
+            name: v.name.lexeme,
+            type: clean,
+            isNullable: isNullable,
+            isList: isList,
+            listItemType: itemType,
+          ));
+        }
       }
     }
 
-    // Also check constructor params (for Freezed / data classes)
+    // Also capture constructor params (Freezed / data classes).
     for (final member in node.members) {
       if (member is! ConstructorDeclaration) continue;
       for (final param in member.parameters.parameters) {
@@ -119,7 +117,7 @@ class _StateVisitor extends RecursiveAstVisitor<void> {
     }
 
     if (name == null || rawType == null) return;
-    if (fields.any((f) => f.name == name)) return; // already added
+    if (fields.any((f) => f.name == name)) return;
 
     final isNullable = rawType.endsWith('?');
     final clean =

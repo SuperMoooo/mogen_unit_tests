@@ -2,33 +2,6 @@
 
 /// Everything the generator needs to know about one Riverpod notifier class.
 class NotifierInfo {
-  /// e.g. `CartNotifier`
-  final String className;
-
-  /// Absolute path to source file
-  final String sourceFilePath;
-
-  /// package: import path
-  final String importPath;
-
-  /// The generic type arg of AsyncNotifier<T> / Notifier<T>, e.g. `CartState`
-  final String? stateType;
-
-  /// Whether it extends AsyncNotifier (true) or plain Notifier (false)
-  final bool isAsync;
-
-  /// Repository / service dependencies found in the notifier body
-  final List<RepositoryDep> repositories;
-
-  /// The `build()` method signature
-  final MethodInfo? buildMethod;
-
-  /// All public methods (excluding build)
-  final List<MethodInfo> methods;
-
-  /// Resolved state info from the states/ folder
-  final StateInfo? stateInfo;
-
   const NotifierInfo({
     required this.className,
     required this.sourceFilePath,
@@ -40,36 +13,56 @@ class NotifierInfo {
     required this.methods,
     this.stateInfo,
   });
+
+  /// e.g. `CartNotifier`
+  final String className;
+
+  /// Absolute path to source file.
+  final String sourceFilePath;
+
+  /// `package:` import path.
+  final String importPath;
+
+  /// The generic type arg of `AsyncNotifier<T>` / `Notifier<T>`, e.g. `CartState`.
+  final String? stateType;
+
+  /// Whether it extends `AsyncNotifier` (true) or plain `Notifier` (false).
+  final bool isAsync;
+
+  /// Repository / service dependencies found in the notifier body.
+  final List<RepositoryDep> repositories;
+
+  /// The `build()` method signature.
+  final MethodInfo? buildMethod;
+
+  /// All public methods (excluding build).
+  final List<MethodInfo> methods;
+
+  /// Resolved state info from the `states/` folder.
+  final StateInfo? stateInfo;
 }
 
-/// A repository / service dependency detected inside the notifier
-/// (via `ref.read(...)`, constructor param, or field declaration).
+/// A repository or service dependency detected inside the notifier
+/// (via `ref.read(...)`, `ref.watch(...)`, constructor param, or field).
 class RepositoryDep {
+  const RepositoryDep({
+    required this.type,
+    required this.name,
+    this.providerExpression,
+  });
+
   /// e.g. `CartRepository`
   final String type;
 
   /// e.g. `cartRepository`
   final String name;
 
-  /// The provider expression, e.g. `cartRepositoryProvider`
+  /// The provider expression, e.g. `cartRepositoryProvider`.
   final String? providerExpression;
-
-  const RepositoryDep({
-    required this.type,
-    required this.name,
-    this.providerExpression,
-  });
 }
 
+/// A public method on the notifier that will receive generated test cases.
 class MethodInfo {
-  final String name;
-  final String returnType;
-  final bool isAsync;
-  final List<ParamInfo> params;
-
-  /// true for the `build` method
-  final bool isBuild;
-
   const MethodInfo({
     required this.name,
     required this.returnType,
@@ -77,15 +70,18 @@ class MethodInfo {
     required this.params,
     this.isBuild = false,
   });
+
+  final String name;
+  final String returnType;
+  final bool isAsync;
+  final List<ParamInfo> params;
+
+  /// `true` for the `build` method.
+  final bool isBuild;
 }
 
+/// A single method or constructor parameter.
 class ParamInfo {
-  final String name;
-  final String type;
-  final bool isNamed;
-  final bool isNullable;
-  final String? defaultValue;
-
   const ParamInfo({
     required this.name,
     required this.type,
@@ -93,28 +89,29 @@ class ParamInfo {
     this.isNullable = false,
     this.defaultValue,
   });
+
+  final String name;
+  final String type;
+  final bool isNamed;
+  final bool isNullable;
+  final String? defaultValue;
 }
 
-/// Info about the matching State class from the states/ folder
+/// Info about the matching state class found in the `states/` folder.
 class StateInfo {
-  final String className;
-  final String importPath;
-  final List<StateField> fields;
-
   const StateInfo({
     required this.className,
     required this.importPath,
     required this.fields,
   });
+
+  final String className;
+  final String importPath;
+  final List<StateField> fields;
 }
 
+/// A single field declared on a state class.
 class StateField {
-  final String name;
-  final String type;
-  final bool isNullable;
-  final bool isList;
-  final String? listItemType;
-
   const StateField({
     required this.name,
     required this.type,
@@ -122,4 +119,12 @@ class StateField {
     this.isList = false,
     this.listItemType,
   });
+
+  final String name;
+  final String type;
+  final bool isNullable;
+  final bool isList;
+
+  /// The item type when [isList] is `true`, e.g. `CartItem` for `List<CartItem>`.
+  final String? listItemType;
 }
