@@ -1,5 +1,3 @@
-// lib/src/generators/test_orchestrator.dart
-
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -10,12 +8,9 @@ import '../analyzers/state_parser.dart';
 import '../models/notifier_info.dart';
 import 'test_generator.dart';
 
+/// Runs the feature scan and writes generated tests into `test/unit/features`.
 class TestOrchestrator {
-  final String projectRoot;
-  final String packageName;
-  final bool dryRun;
-  final bool verbose;
-
+  /// Creates an orchestrator for the given project.
   TestOrchestrator({
     required this.projectRoot,
     required this.packageName,
@@ -23,6 +18,19 @@ class TestOrchestrator {
     this.verbose = false,
   });
 
+  /// Absolute path to the project root.
+  final String projectRoot;
+
+  /// Package name used to build import paths.
+  final String packageName;
+
+  /// When `true`, generated files are not written to disk.
+  final bool dryRun;
+
+  /// When `true`, progress messages are emitted during execution.
+  final bool verbose;
+
+  /// Scans the project, parses notifiers and state models, and writes tests.
   Future<OrchestratorResult> run() async {
     final featuresRoot = p.join(projectRoot, 'lib', 'features');
     final testRoot = p.join(projectRoot, 'test', 'features');
@@ -52,7 +60,6 @@ class TestOrchestrator {
           final notifiers = notifierParser.parse(notifierFile);
 
           for (var notifier in notifiers) {
-            // Enrich with state info
             final matched = _matchState(notifier, states);
             if (matched != null) {
               notifier = NotifierInfo(
@@ -75,9 +82,9 @@ class TestOrchestrator {
             final content = generator.generate(notifier);
             final outPath = p.join(
               testRoot,
+              'unit',
+              'features',
               bundle.featureName,
-              'presentation',
-              'notifiers',
               '${_snake(notifier.className)}_test.dart',
             );
 
@@ -107,19 +114,15 @@ class TestOrchestrator {
     );
   }
 
-  // ── helpers ───────────────────────────────────────────────────────────────
-
   StateInfo? _matchState(NotifierInfo n, List<StateInfo> states) {
     if (states.isEmpty) return null;
 
-    // 1. Direct stateType match, e.g. AsyncNotifier<CartState> → CartState
     if (n.stateType != null) {
       final match = states.firstWhere((s) => s.className == n.stateType,
           orElse: () => _none);
       if (!identical(match, _none)) return match;
     }
 
-    // 2. Name prefix match: CartNotifier → CartState
     final prefix =
         n.className.replaceAll(RegExp(r'(Notifier|Cubit|Bloc|ViewModel)$'), '');
     for (final s in states) {
@@ -129,7 +132,7 @@ class TestOrchestrator {
     return null;
   }
 
-  static final _none =
+  static const _none =
       StateInfo(className: '__none__', importPath: '', fields: []);
 
   void _write(String path, String content) {
@@ -139,7 +142,7 @@ class TestOrchestrator {
   }
 
   void _log(String msg) {
-    if (verbose) print(msg);
+    if (verbose) stdout.writeln(msg);
   }
 
   String _snake(String name) => name
@@ -148,12 +151,21 @@ class TestOrchestrator {
       .replaceFirst(RegExp(r'^_'), '');
 }
 
+/// Summary of the results produced by a test generation run.
 class OrchestratorResult {
+  /// Number of features scanned.
   final int featuresScanned;
+
+  /// Number of files successfully written.
   final int filesWritten;
+
+  /// Number of files skipped because dry-run mode was active.
   final int filesSkipped;
+
+  /// Errors encountered during generation.
   final List<String> errors;
 
+  /// Creates a result summary.
   const OrchestratorResult({
     required this.featuresScanned,
     required this.filesWritten,
@@ -161,5 +173,6 @@ class OrchestratorResult {
     required this.errors,
   });
 
+  /// Returns `true` when the run produced one or more errors.
   bool get hasErrors => errors.isNotEmpty;
 }

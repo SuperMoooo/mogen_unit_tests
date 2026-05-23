@@ -1,17 +1,16 @@
-// lib/src/analyzers/feature_scanner.dart
-
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
-/// Walks  lib/features/<featureName>/presentation/notifiers/
-/// and    lib/features/<featureName>/presentation/states/   (optional)
-/// returning grouped paths per feature.
+/// Scans `lib/features` and groups notifier and state files by feature.
 class FeatureScanner {
-  final String featuresRoot; // absolute path to lib/features
-
+  /// Creates a scanner rooted at [featuresRoot].
   FeatureScanner({required this.featuresRoot});
 
+  /// Absolute path to the `lib/features` directory.
+  final String featuresRoot;
+
+  /// Scans the configured features directory and returns discovered bundles.
   List<FeatureBundle> scan() {
     final dir = Directory(featuresRoot);
     if (!dir.existsSync()) {
@@ -28,7 +27,7 @@ class FeatureScanner {
       final statesDir =
           Directory(p.join(featureDir.path, 'presentation', 'states'));
 
-      if (!notifiersDir.existsSync()) continue; // not a presentation feature
+      if (!notifiersDir.existsSync()) continue;
 
       final notifierFiles = _dartFiles(notifiersDir);
       if (notifierFiles.isEmpty) continue;
@@ -55,16 +54,25 @@ class FeatureScanner {
       .toList();
 }
 
+/// A discovered feature with its notifier and state source files.
 class FeatureBundle {
-  final String featureName;
-  final String featurePath;
-  final List<String> notifierFiles;
-  final List<String> stateFiles;
-
+  /// Creates a bundle for one feature.
   const FeatureBundle({
     required this.featureName,
     required this.featurePath,
     required this.notifierFiles,
     required this.stateFiles,
   });
+
+  /// The feature directory name.
+  final String featureName;
+
+  /// The absolute path to the feature directory.
+  final String featurePath;
+
+  /// Source files that declare notifiers.
+  final List<String> notifierFiles;
+
+  /// Source files that declare state classes.
+  final List<String> stateFiles;
 }

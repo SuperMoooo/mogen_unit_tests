@@ -36,11 +36,11 @@ Generated tests are written to:
 
 ```
 test/
-└── features/
-    └── cart/
-        └── presentation/
-            └── notifiers/
-                └── cart_notifier_test.dart
+└── unit/
+    └── features/
+        └── cart/
+            └── cart_notifier_test.dart
+
 ```
 
 ---
@@ -51,7 +51,7 @@ Add to your Flutter project's `pubspec.yaml` under `dev_dependencies`:
 
 ```yaml
 dev_dependencies:
-    mogen_unit_tests: ^1.0.2
+    mogen_unit_tests: ^1.0.3
 ```
 
 Then run:

@@ -1,5 +1,3 @@
-// lib/src/analyzers/notifier_parser.dart
-
 import 'dart:io';
 
 import 'package:analyzer/dart/analysis/utilities.dart';
@@ -9,13 +7,18 @@ import 'package:path/path.dart' as p;
 
 import '../models/notifier_info.dart';
 
-/// Parses a notifier source file and returns all [NotifierInfo] found.
+/// Parses notifier source files and extracts the metadata needed to generate tests.
 class NotifierParser {
+  /// Creates a parser using the project root and package name.
   const NotifierParser({required this.projectRoot, required this.packageName});
 
+  /// Absolute path to the project root.
   final String projectRoot;
+
+  /// Package name used to generate `package:` import paths.
   final String packageName;
 
+  /// Parses [filePath] and returns all notifiers declared in that file.
   List<NotifierInfo> parse(String filePath) {
     final content = File(filePath).readAsStringSync();
     final result = parseString(
@@ -218,10 +221,9 @@ class _RepoRefVisitor extends RecursiveAstVisitor<void> {
     final cleaned = providerExpr.replaceAll(RegExp(r'\.notifier\b'), '').trim();
     final match = RegExp(r'^([a-z][a-zA-Z0-9]*)Provider').firstMatch(cleaned);
     if (match == null) return null;
-    final camel = match.group(1)!;
-    return camel[0].toUpperCase() + camel.substring(1);
+    return match.group(1);
   }
 
   String _typeToFieldName(String type) =>
-      type[0].toLowerCase() + type.substring(1);
+      type.substring(0, 1).toLowerCase() + type.substring(1);
 }

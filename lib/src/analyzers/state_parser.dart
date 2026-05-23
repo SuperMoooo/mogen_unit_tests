@@ -9,15 +9,18 @@ import 'package:path/path.dart' as p;
 
 import '../models/notifier_info.dart';
 
-/// Parses state files in `presentation/states/` and extracts field types
-/// so the generator can produce type-accurate mock data.
+/// Parses state files and extracts field metadata for generated tests.
 class StateParser {
+  /// Creates a parser using the project root and package name.
   const StateParser({required this.projectRoot, required this.packageName});
 
+  /// Absolute path to the project root.
   final String projectRoot;
+
+  /// Package name used to generate `package:` import paths.
   final String packageName;
 
-  /// Parse all [filePaths] and return every [StateInfo] found.
+  /// Parses [filePaths] and returns all discovered state models.
   List<StateInfo> parseAll(List<String> filePaths) {
     final result = <StateInfo>[];
     for (final path in filePaths) {

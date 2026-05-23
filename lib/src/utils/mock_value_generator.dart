@@ -1,9 +1,10 @@
 // lib/src/utils/mock_value_generator.dart
 
-/// Maps a Dart type string → a sensible literal for test scaffolding.
+/// Maps a Dart type string to a sensible literal for generated test scaffolding.
 class MockValueGenerator {
   MockValueGenerator._();
 
+  /// Returns a literal expression suitable for [rawType].
   static String forType(String rawType) {
     final type = rawType.replaceAll('?', '').trim();
 
@@ -39,7 +40,6 @@ class MockValueGenerator {
       case 'Uri':
         return "Uri.parse('https://example.com')";
       default:
-        // Complex type → emit a Fake() call
         return 'Fake$type()';
     }
   }
@@ -51,6 +51,7 @@ class MockValueGenerator {
     return 'dynamic';
   }
 
+  /// Returns `true` when [type] is one of the primitive literal types.
   static bool isPrimitive(String type) {
     const p = {
       'String',

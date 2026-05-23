@@ -1,5 +1,5 @@
-## [1.0.2]
+## [1.0.3]
 
 ### Changed
 
-- Pubspec dependencies versions
+- generated tests path
