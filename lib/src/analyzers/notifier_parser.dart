@@ -150,28 +150,11 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
   }
 
   ParamInfo? _resolveParam(FormalParameter param) {
-    String? name;
-    String type = 'dynamic';
+    final source = param.toSource().trim();
     final isNamed = param.isNamed;
-    String? defaultValue;
-
-    if (param is SimpleFormalParameter) {
-      name = param.name?.lexeme;
-      type = param.type?.toSource() ?? 'dynamic';
-    } else if (param is DefaultFormalParameter) {
-      defaultValue = param.defaultValue?.toSource();
-      final inner = param.parameter;
-      if (inner is SimpleFormalParameter) {
-        name = inner.name?.lexeme;
-        type = inner.type?.toSource() ?? 'dynamic';
-      }
-    } else if (param is FieldFormalParameter) {
-      name = param.name.lexeme;
-      type = param.type?.toSource() ?? 'dynamic';
-    } else if (param is SuperFormalParameter) {
-      name = param.name.lexeme;
-      type = param.type?.toSource() ?? 'dynamic';
-    }
+    final name = param.name?.lexeme ?? _extractNameFromSource(source);
+    final type = _extractTypeFromSource(source, name);
+    final defaultValue = _extractDefaultValue(source);
 
     if (name == null) return null;
     return ParamInfo(
@@ -181,6 +164,56 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
       isNullable: type.endsWith('?'),
       defaultValue: defaultValue,
     );
+  }
+
+  String _extractTypeFromSource(String source, String? name) {
+    final trimmed = source.trim();
+    if (trimmed.startsWith('this.') || trimmed.startsWith('super.')) {
+      return 'dynamic';
+    }
+
+    String normalized = trimmed;
+    if (normalized.contains('=')) {
+      normalized = normalized.split('=').first.trim();
+    }
+
+    normalized = normalized.replaceFirst(
+      RegExp(r'^(required|covariant|final|const|late|var)\s+'),
+      '',
+    );
+
+    if (name == null || !normalized.contains(name)) {
+      return 'dynamic';
+    }
+
+    final type = normalized.substring(0, normalized.lastIndexOf(name)).trim();
+    return type.isEmpty ? 'dynamic' : type;
+  }
+
+  String? _extractNameFromSource(String source) {
+    final trimmed = source.trim();
+    if (trimmed.startsWith('this.') || trimmed.startsWith('super.')) {
+      final name = trimmed.split('.').last.trim();
+      return name.isEmpty ? null : name;
+    }
+
+    String normalized = trimmed;
+    if (normalized.contains('=')) {
+      normalized = normalized.split('=').first.trim();
+    }
+
+    normalized = normalized.replaceFirst(
+      RegExp(r'^(required|covariant|final|const|late|var)\s+'),
+      '',
+    );
+
+    final token = normalized.split(RegExp(r'\s+')).lastOrNull;
+    return token == null || token.isEmpty ? null : token;
+  }
+
+  String? _extractDefaultValue(String source) {
+    if (!source.contains('=')) return null;
+    return source.split('=').skip(1).join('=').trim();
   }
 
   bool _isAsync(MethodDeclaration m) {

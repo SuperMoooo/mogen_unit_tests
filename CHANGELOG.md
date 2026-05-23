@@ -1,5 +1,5 @@
-## [1.0.8]
+## [1.0.9]
 
 ### Fix:
 
-- Platform support e static analysis
+- static analysis for SimpleFormalParameter

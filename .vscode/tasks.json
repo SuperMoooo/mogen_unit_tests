@@ -1,0 +1,41 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Verify notifier parser analysis",
+			"type": "shell",
+			"command": "dart analyze lib/src/analyzers/notifier_parser.dart",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Verify notifier parser analysis",
+			"type": "shell",
+			"command": "dart analyze lib/src/analyzers/notifier_parser.dart",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Verify state parser analysis",
+			"type": "shell",
+			"command": "dart analyze lib/src/analyzers/state_parser.dart",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Remove temporary inspection file",
+			"type": "shell",
+			"command": "del /F /Q tool\\inspect_ast.dart",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		}
+	]
+}

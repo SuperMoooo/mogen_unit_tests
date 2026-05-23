@@ -109,27 +109,11 @@ class _StateVisitor extends RecursiveAstVisitor<void> {
   }
 
   void _addParamAsField(FormalParameter param, List<StateField> fields) {
-    String? name;
-    String? rawType;
+    final source = param.toSource().trim();
+    final name = param.name?.lexeme ?? _extractNameFromSource(source);
+    final rawType = _extractTypeFromSource(source, name);
 
-    if (param is SimpleFormalParameter) {
-      name = param.name?.lexeme;
-      rawType = param.type?.toSource();
-    } else if (param is DefaultFormalParameter) {
-      final inner = param.parameter;
-      if (inner is SimpleFormalParameter) {
-        name = inner.name?.lexeme;
-        rawType = inner.type?.toSource();
-      }
-    } else if (param is FieldFormalParameter) {
-      name = param.name.lexeme;
-      rawType = param.type?.toSource();
-    } else if (param is SuperFormalParameter) {
-      name = param.name.lexeme;
-      rawType = param.type?.toSource();
-    }
-
-    if (name == null || rawType == null) return;
+    if (name == null) return;
     if (fields.any((f) => f.name == name)) return;
 
     final isNullable = rawType.endsWith('?');
@@ -144,6 +128,51 @@ class _StateVisitor extends RecursiveAstVisitor<void> {
       isList: isList,
       listItemType: itemType,
     ));
+  }
+
+  String _extractTypeFromSource(String source, String? name) {
+    final trimmed = source.trim();
+    if (trimmed.startsWith('this.') || trimmed.startsWith('super.')) {
+      return 'dynamic';
+    }
+
+    String normalized = trimmed;
+    if (normalized.contains('=')) {
+      normalized = normalized.split('=').first.trim();
+    }
+
+    normalized = normalized.replaceFirst(
+      RegExp(r'^(required|covariant|final|const|late|var)\s+'),
+      '',
+    );
+
+    if (name == null || !normalized.contains(name)) {
+      return 'dynamic';
+    }
+
+    final type = normalized.substring(0, normalized.lastIndexOf(name)).trim();
+    return type.isEmpty ? 'dynamic' : type;
+  }
+
+  String? _extractNameFromSource(String source) {
+    final trimmed = source.trim();
+    if (trimmed.startsWith('this.') || trimmed.startsWith('super.')) {
+      final name = trimmed.split('.').last.trim();
+      return name.isEmpty ? null : name;
+    }
+
+    String normalized = trimmed;
+    if (normalized.contains('=')) {
+      normalized = normalized.split('=').first.trim();
+    }
+
+    normalized = normalized.replaceFirst(
+      RegExp(r'^(required|covariant|final|const|late|var)\s+'),
+      '',
+    );
+
+    final token = normalized.split(RegExp(r'\s+')).lastOrNull;
+    return token == null || token.isEmpty ? null : token;
   }
 
   bool _isState(String name) {
