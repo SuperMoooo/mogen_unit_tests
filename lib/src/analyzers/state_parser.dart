@@ -63,12 +63,15 @@ class _StateVisitor extends RecursiveAstVisitor<void> {
 
   @override
   void visitClassDeclaration(ClassDeclaration node) {
-    final name = node.name.lexeme;
+    final name = node.namePart.typeName.lexeme;
     if (!_isState(name)) return;
+
+    final body = node.body;
+    if (body is! BlockClassBody) return;
 
     final fields = <StateField>[];
 
-    for (final member in node.members) {
+    for (final member in body.members) {
       if (member is FieldDeclaration) {
         final rawType = member.fields.type?.toSource();
         if (rawType == null) continue;
@@ -91,7 +94,7 @@ class _StateVisitor extends RecursiveAstVisitor<void> {
     }
 
     // Also capture constructor params (covers Freezed / data classes).
-    for (final member in node.members) {
+    for (final member in body.members) {
       if (member is! ConstructorDeclaration) continue;
       for (final param in member.parameters.parameters) {
         _addParamAsField(param, fields);

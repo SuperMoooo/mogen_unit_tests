@@ -51,7 +51,7 @@ Add to your Flutter project's `pubspec.yaml` under `dev_dependencies`:
 
 ```yaml
 dev_dependencies:
-    mogen_unit_tests: ^1.0.7
+    mogen_unit_tests: ^1.0.8
 ```
 
 Then run:

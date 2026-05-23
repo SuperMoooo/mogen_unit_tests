@@ -23,7 +23,7 @@ class NotifierParser {
   /// The package name of the project.
   final String packageName;
 
-  /// Parse all [filePaths] and return every [NotifierInfo] found.
+  /// Parse all [filePath] and return every [NotifierInfo] found.
   List<NotifierInfo> parse(String filePath) {
     final content = File(filePath).readAsStringSync();
     final result = parseString(content: content, path: filePath);
@@ -77,14 +77,15 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
       if (!repos.any((r) => r.type == fr.type)) repos.add(fr);
     }
 
+    final body = node.body;
+    if (body is! BlockClassBody) return;
+
     MethodInfo? buildMethod;
     final methods = <MethodInfo>[];
 
-    // Access node.members - stable API with proper type checks
-    for (final member in node.members) {
+    for (final member in body.members) {
       if (member is! MethodDeclaration) continue;
 
-      // Use .name.lexeme to get method name string (stable across analyzer versions)
       final memberName = member.name.lexeme;
       if (memberName.startsWith('_')) continue;
 
@@ -103,9 +104,8 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
       }
     }
 
-    // Use node.name.lexeme to get class name string
     notifiers.add(NotifierInfo(
-      className: node.name.lexeme,
+      className: node.namePart.typeName.lexeme,
       sourceFilePath: filePath,
       importPath: importPath,
       stateType: stateType,
@@ -117,8 +117,11 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
   }
 
   List<RepositoryDep> _extractFieldRepos(ClassDeclaration node) {
+    final body = node.body;
+    if (body is! BlockClassBody) return [];
+
     final deps = <RepositoryDep>[];
-    for (final member in node.members) {
+    for (final member in body.members) {
       if (member is! FieldDeclaration) continue;
       final type = member.fields.type?.toSource();
       if (type == null || !_looksLikeRepo(type)) continue;
