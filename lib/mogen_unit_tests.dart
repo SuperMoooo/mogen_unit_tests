@@ -1,5 +1,12 @@
-// lib/mogen_unit_tests.dart
-
+/// CLI tool that scans `lib/features/**/presentation/notifiers/`, parses
+/// Riverpod `AsyncNotifier` classes, detects repository dependencies via
+/// `ref.read()`, and generates Mocktail-based unit tests with success and
+/// error cases for every method.
+///
+/// Run from your Flutter project root:
+/// ```sh
+/// dart run mogen_unit_tests
+/// ```
 library mogen_unit_tests;
 
 export 'src/analyzers/feature_scanner.dart';
