@@ -80,10 +80,11 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
     MethodInfo? buildMethod;
     final methods = <MethodInfo>[];
 
+    // Access node.members - stable API with proper type checks
     for (final member in node.members) {
       if (member is! MethodDeclaration) continue;
-      // analyzer >=8 removed .name, use .name2; >=10 removed .name2, use .name
-      // We use a try/both approach via the token's lexeme which is stable.
+
+      // Use .name.lexeme to get method name string (stable across analyzer versions)
       final memberName = member.name.lexeme;
       if (memberName.startsWith('_')) continue;
 
@@ -102,6 +103,7 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
       }
     }
 
+    // Use node.name.lexeme to get class name string
     notifiers.add(NotifierInfo(
       className: node.name.lexeme,
       sourceFilePath: filePath,

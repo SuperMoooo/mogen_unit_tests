@@ -20,7 +20,7 @@ class StateParser {
 
   /// The root directory of the Flutter project.
   final String projectRoot;
-  
+
   /// The package name of the project.
   final String packageName;
 
@@ -48,8 +48,7 @@ class StateParser {
   String _toPackagePath(String filePath) {
     final libPath = p.join(projectRoot, 'lib');
     if (filePath.startsWith(libPath)) {
-      final rel =
-          p.relative(filePath, from: libPath).replaceAll(r'\', '/');
+      final rel = p.relative(filePath, from: libPath).replaceAll(r'\', '/');
       return 'package:$packageName/$rel';
     }
     return filePath;
@@ -75,9 +74,8 @@ class _StateVisitor extends RecursiveAstVisitor<void> {
         if (rawType == null) continue;
 
         final isNullable = rawType.endsWith('?');
-        final clean = isNullable
-            ? rawType.substring(0, rawType.length - 1)
-            : rawType;
+        final clean =
+            isNullable ? rawType.substring(0, rawType.length - 1) : rawType;
         final (isList, itemType) = _listInfo(clean);
 
         for (final v in member.fields.variables) {
@@ -132,9 +130,8 @@ class _StateVisitor extends RecursiveAstVisitor<void> {
     if (fields.any((f) => f.name == name)) return;
 
     final isNullable = rawType.endsWith('?');
-    final clean = isNullable
-        ? rawType.substring(0, rawType.length - 1)
-        : rawType;
+    final clean =
+        isNullable ? rawType.substring(0, rawType.length - 1) : rawType;
     final (isList, itemType) = _listInfo(clean);
 
     fields.add(StateField(
