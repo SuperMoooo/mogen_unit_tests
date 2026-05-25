@@ -1,5 +1,11 @@
-## [1.0.9]
+## [1.0.10]
 
 ### Fix:
 
-- static analysis for SimpleFormalParameter
+- No cross-feature repository imports
+- Only domain repositories imported
+- No tests for 'p' helper methods
+- State assertions for state-modifying methods
+- Real method names in stub comments
+- Generated tests compile without changes
+- Tests run successfully

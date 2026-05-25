@@ -8,7 +8,7 @@ import '../analyzers/state_parser.dart';
 import '../models/notifier_info.dart';
 import 'test_generator.dart';
 
-/// Runs the feature scan and writes generated tests into `test/unit/features`.
+/// Runs the feature scan and writes generated tests into `test/features`.
 class TestOrchestrator {
   /// Creates an orchestrator for the given project.
   TestOrchestrator({
@@ -66,6 +66,7 @@ class TestOrchestrator {
                 className: notifier.className,
                 sourceFilePath: notifier.sourceFilePath,
                 importPath: notifier.importPath,
+                packageName: packageName,
                 stateType: notifier.stateType,
                 isAsync: notifier.isAsync,
                 repositories: notifier.repositories,
@@ -76,6 +77,17 @@ class TestOrchestrator {
               _log(
                   '    ✅  ${notifier.className} → state: ${matched.className}');
             } else {
+              notifier = NotifierInfo(
+                className: notifier.className,
+                sourceFilePath: notifier.sourceFilePath,
+                importPath: notifier.importPath,
+                packageName: packageName,
+                stateType: notifier.stateType,
+                isAsync: notifier.isAsync,
+                repositories: notifier.repositories,
+                buildMethod: notifier.buildMethod,
+                methods: notifier.methods,
+              );
               _log('    ✅  ${notifier.className} (no state matched)');
             }
 

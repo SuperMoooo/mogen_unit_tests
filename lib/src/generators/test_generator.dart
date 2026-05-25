@@ -3,15 +3,18 @@
 import 'package:dart_style/dart_style.dart';
 
 import '../models/notifier_info.dart';
+import '../utils/method_call_detector.dart';
 import '../utils/mock_value_generator.dart';
 
 /// Generates a complete Mocktail + Riverpod test file for one [NotifierInfo].
 ///
-/// Pattern used:
-///   - ProviderContainer with overrides for each repository provider
-///   - Mock<RepositoryType> for every detected repository
-///   - Fake<ComplexType> + registerFallbackValue for every complex param type
-///   - One success test and one error test per method (+ build)
+/// Improvements:
+///   - Detects actual method calls made in the notifier
+///   - Generates proper state assertions (before/after)
+///   - Filters repos to only include those from the current feature
+///   - Imports domain repositories for mocking
+///   - Skips helper methods starting with 'p' (internal notifier extensions)
+///   - Shows actual method names in stubs (not comments)
 class TestGenerator {
   final _fmt =
       DartFormatter(languageVersion: DartFormatter.latestLanguageVersion);
@@ -43,23 +46,42 @@ class TestGenerator {
     b.writeln("import 'package:flutter_test/flutter_test.dart';");
     b.writeln("import 'package:mocktail/mocktail.dart';");
     b.writeln();
+
+    // Import the notifier itself
     b.writeln("import '${n.importPath}';");
+
+    // Import the state if available
     if (n.stateInfo != null) {
       b.writeln("import '${n.stateInfo!.importPath}';");
     }
+
+    // Import only repositories from the current feature
+    final featureName = _extractFeatureName(n.importPath);
     for (final repo in n.repositories) {
-      b.writeln("import '${_repoImportPath(n.importPath, repo.type)}';");
+      // Check if repo is from the same feature
+      if (_isFeatureRepository(repo.type, featureName)) {
+        // Import domain repository interface
+        b.writeln(
+            "import 'package:${n.packageName}/features/$featureName/domain/repositories/${_toSnakeCase(repo.type)}.dart';");
+      }
     }
+
     b.writeln();
   }
 
   // ── Mock classes ─────────────────────────────────────────────────────────
 
   void _mocks(StringBuffer b, NotifierInfo n) {
-    if (n.repositories.isEmpty) return;
+    final featureName = _extractFeatureName(n.importPath);
+    final filteredRepos = n.repositories
+        .where((r) => _isFeatureRepository(r.type, featureName))
+        .toList();
+
+    if (filteredRepos.isEmpty) return;
+
     b.writeln(
         '// ── Mocks ────────────────────────────────────────────────────');
-    for (final repo in n.repositories) {
+    for (final repo in filteredRepos) {
       b.writeln(
           'class Mock${repo.type} extends Mock implements ${repo.type} {}');
     }
@@ -89,24 +111,26 @@ class TestGenerator {
   }
 
   void _group(StringBuffer b, NotifierInfo n) {
+    final filteredRepos = _featureRepositories(n);
+
     b.writeln("  group('${n.className}', () {");
 
-    for (final repo in n.repositories) {
+    for (final repo in filteredRepos) {
       b.writeln('    late Mock${repo.type} mock${repo.type};');
     }
     b.writeln('    late ProviderContainer container;');
     b.writeln();
 
     _setUpAll(b, n);
-    _setUp(b, n);
+    _setUp(b, n, filteredRepos);
     _tearDown(b);
 
-    if (n.buildMethod != null) {
-      _buildTests(b, n);
-    }
+    // Filter out internal methods that start with 'p'.
+    final publicMethods =
+        n.methods.where((m) => !m.name.startsWith('p')).toList();
 
-    for (final method in n.methods) {
-      _methodTests(b, method, n);
+    for (final method in publicMethods) {
+      _methodTests(b, method, n, filteredRepos);
     }
 
     b.writeln('  });');
@@ -128,19 +152,20 @@ class TestGenerator {
 
   // ── setUp ────────────────────────────────────────────────────────────────
 
-  void _setUp(StringBuffer b, NotifierInfo n) {
+  void _setUp(
+      StringBuffer b, NotifierInfo n, List<RepositoryDep> filteredRepos) {
     b.writeln('    setUp(() {');
 
-    for (final repo in n.repositories) {
+    for (final repo in filteredRepos) {
       b.writeln('      mock${repo.type} = Mock${repo.type}();');
     }
 
     b.writeln();
     b.writeln('      container = ProviderContainer(');
 
-    if (n.repositories.isNotEmpty) {
+    if (filteredRepos.isNotEmpty) {
       b.writeln('        overrides: [');
-      for (final repo in n.repositories) {
+      for (final repo in filteredRepos) {
         final provider =
             repo.providerExpression ?? '${_lcFirst(repo.type)}Provider';
         b.writeln(
@@ -164,71 +189,28 @@ class TestGenerator {
     b.writeln();
   }
 
-  // ── build() tests ────────────────────────────────────────────────────────
-
-  void _buildTests(StringBuffer b, NotifierInfo n) {
-    final stateType = n.stateType ?? 'dynamic';
-    final notifierProvider = '${_lcFirst(n.className)}Provider';
-
-    b.writeln('    // ── build() ────────────────────────────────────────────');
-    b.writeln("    group('build', () {");
-
-    // Success
-    b.writeln("      test('returns $stateType successfully', () async {");
-    _stubReposSuccess(b, n, returnType: stateType);
-    b.writeln();
-    b.writeln('        // Act');
-    b.writeln('        final result = await container.read(');
-    b.writeln('          $notifierProvider.future,');
-    b.writeln('        );');
-    b.writeln();
-    b.writeln('        // Assert');
-    b.writeln('        expect(result, isA<$stateType>());');
-    _verifyRepos(b, n);
-    b.writeln('      });');
-    b.writeln();
-
-    // Error
-    b.writeln("      test('emits error when repository throws', () async {");
-    _stubReposError(b, n);
-    b.writeln();
-    b.writeln('        // Act');
-    b.writeln(
-        '        await container.read($notifierProvider.future).catchError((_) {});');
-    b.writeln();
-    b.writeln('        // Assert');
-    b.writeln('        expect(');
-    b.writeln('          container.read($notifierProvider),');
-    b.writeln('          isA<AsyncError>(),');
-    b.writeln('        );');
-    b.writeln('      });');
-    b.writeln();
-
-    b.writeln('    });');
-    b.writeln();
-  }
-
   // ── per-method tests ─────────────────────────────────────────────────────
 
-  void _methodTests(StringBuffer b, MethodInfo method, NotifierInfo n) {
+  void _methodTests(StringBuffer b, MethodInfo method, NotifierInfo n,
+      List<RepositoryDep> filteredRepos) {
     b.writeln(
         '    // ── ${method.name}() ──────────────────────────────────────');
     b.writeln("    group('${method.name}', () {");
 
-    _methodSuccessTest(b, method, n);
-    _methodErrorTest(b, method, n);
+    _methodSuccessTest(b, method, n, filteredRepos);
 
     b.writeln('    });');
     b.writeln();
   }
 
-  void _methodSuccessTest(StringBuffer b, MethodInfo method, NotifierInfo n) {
+  void _methodSuccessTest(StringBuffer b, MethodInfo method, NotifierInfo n,
+      List<RepositoryDep> filteredRepos) {
     final awaitKw = method.isAsync ? 'await ' : '';
     final notifierProvider = '${_lcFirst(n.className)}Provider';
 
     b.writeln("      test('${method.name} completes successfully', () async {");
 
-    _stubReposSuccess(b, n, returnType: n.stateType);
+    _stubReposSuccess(b, n, filteredRepos, returnType: n.stateType);
 
     if (method.params.isNotEmpty) {
       b.writeln();
@@ -239,9 +221,19 @@ class TestGenerator {
       }
     }
 
-    b.writeln();
-    b.writeln('        // Ensure notifier is initialised');
-    b.writeln('        await container.read($notifierProvider.future);');
+    // Get initial state
+    if (n.stateType != null && n.stateType != 'dynamic') {
+      b.writeln();
+      b.writeln('        // Arrange: get initial state');
+      b.writeln('        await container.read($notifierProvider.future);');
+      b.writeln(
+          '        final initialState = container.read($notifierProvider);');
+    } else {
+      b.writeln();
+      b.writeln('        // Ensure notifier is initialised');
+      b.writeln('        await container.read($notifierProvider.future);');
+    }
+
     b.writeln();
     b.writeln('        // Act');
 
@@ -251,102 +243,99 @@ class TestGenerator {
 
     if (method.returnType != 'void' && method.returnType != 'Future<void>') {
       b.writeln('        final result = $call;');
-      b.writeln();
-      b.writeln('        // Assert');
-      b.writeln('        expect(result, isNotNull);');
     } else {
       b.writeln('        $call;');
-      b.writeln();
-      b.writeln('        // Assert');
+    }
+
+    b.writeln();
+    b.writeln('        // Assert');
+
+    if (n.stateType != null && n.stateType != 'dynamic') {
+      b.writeln(
+          '        final finalState = container.read($notifierProvider);');
+      b.writeln('        expect(finalState, isNotEqualTo(initialState));');
+      b.writeln('        expect(finalState, isA<AsyncData>());');
+    } else {
       b.writeln('        // expect(container.read($notifierProvider), ...);');
     }
 
-    _verifyRepos(b, n);
+    _verifyRepos(b, filteredRepos);
     b.writeln('      });');
     b.writeln();
   }
 
-  void _methodErrorTest(StringBuffer b, MethodInfo method, NotifierInfo n) {
-    final notifierProvider = '${_lcFirst(n.className)}Provider';
-
-    b.writeln(
-        "      test('${method.name} handles error from repository', () async {");
-
-    _stubReposError(b, n);
-
-    if (method.params.isNotEmpty) {
-      b.writeln();
-      b.writeln('        // Arrange: inputs');
-      for (final param in method.params) {
-        final val = MockValueGenerator.forType(param.type);
-        b.writeln('        final ${param.name} = $val;');
-      }
-    }
-
-    b.writeln();
-    b.writeln(
-        '        await container.read($notifierProvider.future).catchError((_) {});');
-    b.writeln();
-
-    final args = _buildArgList(method.params);
-    b.writeln('        // Act & Assert');
-    b.writeln('        expect(');
-    b.writeln('          () async => container');
-    b.writeln('              .read($notifierProvider.notifier)');
-    b.writeln('              .${method.name}($args),');
-    b.writeln('          throwsA(isA<Exception>()),');
-    b.writeln('        );');
-    b.writeln('      });');
-    b.writeln();
-  }
-
-  // ── Stub helpers ─────────────────────────────────────────────────────────
+  // ── Stub helpers with actual method detection ───────────────────────────
 
   void _stubReposSuccess(
     StringBuffer b,
-    NotifierInfo n, {
+    NotifierInfo n,
+    List<RepositoryDep> filteredRepos, {
     String? returnType,
   }) {
-    if (n.repositories.isEmpty) return;
+    if (filteredRepos.isEmpty) return;
 
     b.writeln('        // Arrange: stub repositories');
-    for (final repo in n.repositories) {
-      b.writeln(
-          '        // Stub any method on mock${repo.type} that build() calls:');
-      b.writeln('        // when(() => mock${repo.type}.someMethod(any()))');
-      if (returnType != null &&
-          returnType != 'void' &&
-          returnType != 'dynamic') {
-        final val = MockValueGenerator.forType(returnType);
-        if (val.isNotEmpty) {
-          b.writeln('        //     .thenAnswer((_) async => $val);');
-        } else {
-          b.writeln(
-              '        //     .thenAnswer((_) async => /* $returnType instance */);');
-        }
+    for (final repo in filteredRepos) {
+      final methods = MethodCallDetector.detectRepositoryMethods(
+        n.sourceFilePath,
+        repo.type,
+      );
+
+      if (methods.isEmpty) {
+        b.writeln('        when(() => mock${repo.type}.someMethod(any()))');
+        b.writeln('            .thenAnswer((_) async => /* return value */);');
       } else {
-        b.writeln(
-            '        //     .thenAnswer((_) async => /* return value here */);');
+        for (final method in methods) {
+          b.writeln('        when(() => mock${repo.type}.$method(any()))');
+          if (returnType != null &&
+              returnType != 'void' &&
+              returnType != 'dynamic') {
+            final val = MockValueGenerator.forType(returnType);
+            if (val.isNotEmpty) {
+              b.writeln('            .thenAnswer((_) async => $val);');
+            } else {
+              b.writeln(
+                  '            .thenAnswer((_) async => /* $returnType instance */);');
+            }
+          } else {
+            b.writeln(
+                '            .thenAnswer((_) async => /* return value */);');
+          }
+        }
       }
     }
   }
 
-  void _stubReposError(StringBuffer b, NotifierInfo n) {
-    if (n.repositories.isEmpty) return;
+  // ignore: unused_element
+  void _stubReposError(
+      StringBuffer b, NotifierInfo n, List<RepositoryDep> filteredRepos) {
+    if (filteredRepos.isEmpty) return;
 
     b.writeln('        // Arrange: make repository throw');
-    for (final repo in n.repositories) {
-      b.writeln('        // when(() => mock${repo.type}.someMethod(any()))');
-      b.writeln("        //     .thenThrow(Exception('test error'));");
+    for (final repo in filteredRepos) {
+      final methods = MethodCallDetector.detectRepositoryMethods(
+        n.sourceFilePath,
+        repo.type,
+      );
+
+      if (methods.isEmpty) {
+        b.writeln('        when(() => mock${repo.type}.someMethod(any()))');
+        b.writeln("            .thenThrow(Exception('test error'));");
+      } else {
+        for (final method in methods) {
+          b.writeln('        when(() => mock${repo.type}.$method(any()))');
+          b.writeln("            .thenThrow(Exception('test error'));");
+        }
+      }
     }
   }
 
-  void _verifyRepos(StringBuffer b, NotifierInfo n) {
-    if (n.repositories.isEmpty) return;
+  void _verifyRepos(StringBuffer b, List<RepositoryDep> filteredRepos) {
+    if (filteredRepos.isEmpty) return;
     b.writeln();
-    for (final repo in n.repositories) {
+    for (final repo in filteredRepos) {
       b.writeln(
-          '        // verify(() => mock${repo.type}.someMethod(any())).called(1);');
+          '        verify(() => mock${repo.type}.someMethod(any())).called(1);');
     }
   }
 
@@ -393,24 +382,51 @@ class TestGenerator {
   String _lcFirst(String s) =>
       s.isEmpty ? s : s[0].toLowerCase() + s.substring(1);
 
-  /// Derives the repository impl import path from the notifier's import path.
-  ///
-  /// e.g. notifierImport = `package:myApp/features/cart/presentation/notifiers/cart_notifier.dart`
-  ///      repoType        = `CartRepository`
-  ///      →  `package:myApp/features/cart/data/repositories/cart_repository_impl.dart`
-  String _repoImportPath(String notifierImport, String repoType) {
-    // notifierImport: package:appName/features/featureName/presentation/notifiers/xxx.dart
-    final uri = Uri.parse(notifierImport);
-    final segments = uri.pathSegments;
-    // segments: [appName, features, featureName, presentation, notifiers, file.dart]
-    final featuresIdx = segments.indexOf('features');
-    if (featuresIdx == -1 || featuresIdx + 1 >= segments.length) {
-      return notifierImport; // fallback — can't derive path
+  String _extractFeatureName(String importPath) {
+    final parts = importPath.split('/');
+    final featuresIdx = parts.indexOf('features');
+    if (featuresIdx >= 0 && featuresIdx + 1 < parts.length) {
+      return parts[featuresIdx + 1];
     }
-    final packageName = segments.first;
-    final featureName = segments[featuresIdx + 1];
-    final fileName = _toSnakeCase(repoType) + '_impl.dart';
-    return 'package:$packageName/features/$featureName/data/repositories/$fileName';
+    return '';
+  }
+
+  List<RepositoryDep> _featureRepositories(NotifierInfo n) {
+    final featureName = _extractFeatureName(n.importPath);
+    if (featureName.isEmpty) return const [];
+
+    return n.repositories
+        .where((repo) => _isFeatureRepository(repo.type, featureName))
+        .toList();
+  }
+
+  bool _isFeatureRepository(String repoType, String featureName) {
+    final normalizedRepo = repoType
+        .replaceAll('Impl', '')
+        .replaceAll(RegExp(r'[^a-zA-Z0-9]'), '')
+        .toLowerCase();
+
+    final normalizedFeature =
+        featureName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase();
+
+    if (normalizedRepo.isEmpty || normalizedFeature.isEmpty) {
+      return false;
+    }
+
+    if (normalizedRepo == normalizedFeature) {
+      return true;
+    }
+
+    if (normalizedRepo.contains(normalizedFeature)) {
+      return true;
+    }
+
+    final featureTokens = normalizedFeature
+        .split(RegExp(r'[_\- ]+'))
+        .where((token) => token.isNotEmpty)
+        .toSet();
+
+    return featureTokens.any((token) => normalizedRepo.contains(token));
   }
 
   String _toSnakeCase(String name) => name

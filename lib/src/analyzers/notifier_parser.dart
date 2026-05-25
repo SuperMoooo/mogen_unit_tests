@@ -31,6 +31,7 @@ class NotifierParser {
     final visitor = _NotifierVisitor(
       filePath: filePath,
       importPath: _toPackagePath(filePath),
+      packageName: packageName, // ← ADDED
     );
     result.unit.visitChildren(visitor);
     return visitor.notifiers;
@@ -49,10 +50,15 @@ class NotifierParser {
 // ─── Visitor ────────────────────────────────────────────────────────────────
 
 class _NotifierVisitor extends RecursiveAstVisitor<void> {
-  _NotifierVisitor({required this.filePath, required this.importPath});
+  _NotifierVisitor({
+    required this.filePath,
+    required this.importPath,
+    required this.packageName, // ← ADDED PARAMETER
+  });
 
   final String filePath;
   final String importPath;
+  final String packageName; // ← ADDED FIELD
   final List<NotifierInfo> notifiers = [];
 
   @override
@@ -108,6 +114,7 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
       className: node.namePart.typeName.lexeme,
       sourceFilePath: filePath,
       importPath: importPath,
+      packageName: packageName, // ← ADDED
       stateType: stateType,
       isAsync: isAsync,
       repositories: repos,

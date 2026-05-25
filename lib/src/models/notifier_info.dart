@@ -7,6 +7,7 @@ class NotifierInfo {
     required this.className,
     required this.sourceFilePath,
     required this.importPath,
+    required this.packageName,
     this.stateType,
     required this.isAsync,
     required this.repositories,
@@ -23,6 +24,9 @@ class NotifierInfo {
 
   /// The `package:` import path for the notifier source.
   final String importPath;
+
+  /// The package name (e.g., 'traiceapp').
+  final String packageName;
 
   /// The generic type argument of `AsyncNotifier<T>` or `Notifier<T>`, for example `CartState`.
   final String? stateType;

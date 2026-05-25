@@ -36,6 +36,30 @@
 			"isBackground": false,
 			"problemMatcher": [],
 			"group": "test"
+		},
+		{
+			"label": "Run generator tests",
+			"type": "shell",
+			"command": "dart test -r expanded",
+			"args": [],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "Analyze generator file",
+			"type": "shell",
+			"command": "dart analyze lib/src/generators/test_generator.dart",
+			"args": [],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "Delete temporary helper",
+			"type": "shell",
+			"command": "del /F /Q tool\\remove_unused_helper.dart",
+			"args": [],
+			"isBackground": false,
+			"group": "test"
 		}
 	]
 }
