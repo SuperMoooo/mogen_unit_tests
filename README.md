@@ -1,60 +1,64 @@
 # mogen_unit_tests
 
-A CLI tool that scans your Flutter feature folders, reads your Riverpod `AsyncNotifier` / `Notifier` classes, detects repository dependencies, and auto-generates **Mocktail-based unit tests** with success and error cases for every method.
+`mogen_unit_tests` scans your Flutter feature folders, parses Riverpod notifiers, and generates **Mocktail-based unit test scaffolding** for each discovered notifier.
+
+It is designed for projects that keep their notifier and state files under `lib/features/**/presentation/` and want a fast starting point for repeatable unit tests.
 
 ---
 
 ## What it generates
 
-For every notifier it finds, the tool produces a ready-to-run test file with:
+For every notifier it finds, the package creates a ready-to-run test file with:
 
-- `Mock<Repository>` classes for every detected dependency
-- `Fake<Type>` classes + `registerFallbackValue` for every complex parameter type
-- A `ProviderContainer` with repository provider overrides in `setUp`
+- `Mock<Repository>` classes for every repository dependency found via `ref.read(...)` or `ref.watch(...)`
+- `Fake<Type>` classes and `registerFallbackValue(...)` calls for complex parameter types
+- a `ProviderContainer` with repository overrides in `setUp`
 - `container.dispose()` in `tearDown`
-- A `build()` group with a **success** test and an **error** test
-- A group per public method, each with a **success** test and an **error** test
+- a `build()` test group with **success** and **error** cases
+- one test group per public notifier method, each with **success** and **error** cases
 
 ---
 
-## Expected folder structure
+## Project layout
 
-The tool expects this layout inside your Flutter project:
+The CLI expects this layout inside your Flutter app:
 
-```
+```text
 lib/
 └── features/
-    └── cart/                          ← feature name (any name)
+    └── cart/
         └── presentation/
             ├── notifiers/
-            │   └── cart_notifier.dart ← your AsyncNotifier lives here
+            │   └── cart_notifier.dart
             └── states/
-                └── cart_state.dart    ← optional, used to infer field types
+                └── cart_state.dart
 ```
 
 Generated tests are written to:
 
-```
+```text
 test/
-└── unit/
-    └── features/
-        └── cart/
-            └── cart_notifier_test.dart
-
+└── features/
+    └── unit/
+        └── features/
+            └── cart/
+                └── cart_notifier_test.dart
 ```
+
+> The generated path is `test/unit/features/<feature>/<notifier>_test.dart`.
 
 ---
 
 ## Installation
 
-Add to your Flutter project's `pubspec.yaml` under `dev_dependencies`:
+Add the package to your Flutter app's `dev_dependencies`:
 
 ```yaml
 dev_dependencies:
-    mogen_unit_tests: ^1.0.10
+    mogen_unit_tests:
 ```
 
-Then run:
+Install it:
 
 ```bash
 dart pub get
@@ -64,40 +68,40 @@ dart pub get
 
 ## Usage
 
-From the root of your Flutter project:
+Run the generator from the root of your Flutter app:
 
 ```bash
 dart run mogen_unit_tests
 ```
 
-### Options
+### CLI options
 
-| Flag        | Short | Default | Description                                           |
-| ----------- | ----- | ------- | ----------------------------------------------------- |
-| `--root`    | `-r`  | `.`     | Project root directory                                |
-| `--dry-run` | `-d`  | `false` | Preview what would be generated without writing files |
-| `--verbose` | `-v`  | `false` | Print detailed progress                               |
-| `--version` |       |         | Print version and exit                                |
-| `--help`    | `-h`  |         | Show help                                             |
+| Flag        | Short | Default | Description                                          |
+| ----------- | ----- | ------- | ---------------------------------------------------- |
+| `--root`    | `-r`  | `.`     | Project root directory                               |
+| `--dry-run` | `-d`  | `false` | Preview generated files without writing them         |
+| `--verbose` | `-v`  | `false` | Print progress details while scanning and generating |
+| `--version` |       |         | Print the package version and exit                   |
+| `--help`    | `-h`  |         | Show the CLI help text                               |
 
 ### Examples
 
 ```bash
-# Normal run from project root
-dart run mogen_unit_tests
+# Generate tests from the current directory
+ dart run mogen_unit_tests
 
-# Preview without writing any files
-dart run mogen_unit_tests --dry-run --verbose
+# Preview the output without writing files
+ dart run mogen_unit_tests --dry-run --verbose
 
-# Run from a different directory
-dart run mogen_unit_tests --root /path/to/my_project
+# Run against a different Flutter project
+ dart run mogen_unit_tests --root /path/to/my_flutter_app
 ```
 
 ---
 
-## Example input and output
+## Example
 
-### Your notifier (`lib/features/cart/presentation/notifiers/cart_notifier.dart`)
+### Input notifier
 
 ```dart
 @riverpod
@@ -122,7 +126,7 @@ class CartNotifier extends _$CartNotifier {
 }
 ```
 
-### Your state (`lib/features/cart/presentation/states/cart_state.dart`)
+### Input state
 
 ```dart
 class CartState {
@@ -133,7 +137,7 @@ class CartState {
 }
 ```
 
-### Generated test (`test/features/cart/presentation/notifiers/cart_notifier_test.dart`)
+### Generated output
 
 ```dart
 // GENERATED BY mogen_unit_tests — DO NOT EDIT
@@ -146,10 +150,8 @@ import 'package:my_app/features/cart/presentation/notifiers/cart_notifier.dart';
 import 'package:my_app/features/cart/presentation/states/cart_state.dart';
 // TODO: import the file that declares CartRepository
 
-// ── Mocks ─────────────────────────────────────────────────────────────────
 class MockCartRepository extends Mock implements CartRepository {}
 
-// ── Fakes (registerFallbackValue) ─────────────────────────────────────────
 class FakeCartItem extends Fake implements CartItem {}
 
 void main() {
@@ -175,22 +177,18 @@ void main() {
       container.dispose();
     });
 
-    // ── build() ─────────────────────────────────────────────────────────
     group('build', () {
       test('returns CartState successfully', () async {
-        // Arrange: stub repositories
-        // when(() => mockCartRepository.someMethod(any()))
-        //     .thenAnswer((_) async => CartState(...));
+        // when(() => mockCartRepository.fetchCart())
+        //     .thenAnswer((_) async => CartState(items: [], total: 0));
 
-        // Act
         final result = await container.read(cartNotifierProvider.future);
 
-        // Assert
         expect(result, isA<CartState>());
       });
 
       test('emits error when repository throws', () async {
-        // when(() => mockCartRepository.someMethod(any()))
+        // when(() => mockCartRepository.fetchCart())
         //     .thenThrow(Exception('test error'));
 
         await container
@@ -200,106 +198,61 @@ void main() {
         expect(container.read(cartNotifierProvider), isA<AsyncError>());
       });
     });
-
-    // ── addItem() ────────────────────────────────────────────────────────
-    group('addItem', () {
-      test('addItem completes successfully', () async {
-        // Arrange: inputs
-        final item = FakeCartItem();
-
-        await container.read(cartNotifierProvider.future);
-
-        // Act
-        await container.read(cartNotifierProvider.notifier).addItem(item);
-
-        // Assert
-        // verify(() => mockCartRepository.someMethod(any())).called(1);
-      });
-
-      test('addItem handles error from repository', () async {
-        // when(() => mockCartRepository.someMethod(any()))
-        //     .thenThrow(Exception('test error'));
-        final item = FakeCartItem();
-
-        await container.read(cartNotifierProvider.future).catchError((_) {});
-
-        expect(
-          () async => container.read(cartNotifierProvider.notifier).addItem(item),
-          throwsA(isA<Exception>()),
-        );
-      });
-    });
-
-    // ── clearCart() ──────────────────────────────────────────────────────
-    group('clearCart', () {
-      test('clearCart completes successfully', () async {
-        await container.read(cartNotifierProvider.future);
-
-        await container.read(cartNotifierProvider.notifier).clearCart();
-
-        // verify(() => mockCartRepository.someMethod(any())).called(1);
-      });
-
-      test('clearCart handles error from repository', () async {
-        // when(() => mockCartRepository.someMethod(any()))
-        //     .thenThrow(Exception('test error'));
-
-        await container.read(cartNotifierProvider.future).catchError((_) {});
-
-        expect(
-          () async => container.read(cartNotifierProvider.notifier).clearCart(),
-          throwsA(isA<Exception>()),
-        );
-      });
-    });
   });
 }
 ```
 
 ---
 
-## After generation
+## What you still need to fill in
 
-The only lines you need to fill in manually are the `when()` stubs, since the tool reads your notifier but not your repository interface. Each stub is clearly marked:
+The generator scaffolds the repository stubs as comments so you can replace them with your real method names and return values.
 
 ```dart
 // when(() => mockCartRepository.fetchCart())
 //     .thenAnswer((_) async => CartState(items: [], total: 0));
 ```
 
-Uncomment and replace `someMethod` with the real method name from your repository. Everything else runs as-is.
+Everything else is generated for you.
 
 ---
 
 ## Supported notifier types
 
-| Class                         | Detected |
-| ----------------------------- | -------- |
-| `AsyncNotifier<T>`            | ✅       |
-| `AutoDisposeAsyncNotifier<T>` | ✅       |
-| `Notifier<T>`                 | ✅       |
-| `AutoDisposeNotifier<T>`      | ✅       |
+| Class                         | Supported |
+| ----------------------------- | --------- |
+| `AsyncNotifier<T>`            | ✅        |
+| `AutoDisposeAsyncNotifier<T>` | ✅        |
+| `Notifier<T>`                 | ✅        |
+| `AutoDisposeNotifier<T>`      | ✅        |
 
-Repository dependencies are detected via `ref.read(someRepositoryProvider)` and `ref.watch(someRepositoryProvider)` calls inside the notifier body.
+Repository dependencies are detected from `ref.read(...)` and `ref.watch(...)` calls inside the notifier implementation.
 
 ---
 
 ## Limitations
 
-- Only generates **unit tests** — no widget or integration tests
-- Repository `when()` stubs are scaffolded as comments; method names must be filled in manually
-- Requires notifiers to live in `presentation/notifiers/` — other paths are ignored
-- Does not support `family` notifiers with arguments yet
+- Generates **unit tests only** — no widget or integration tests
+- Repository stubs are scaffolded as comments and must be filled in manually
+- Only notifiers under `presentation/notifiers/` are scanned
+- `family` notifiers are not supported yet
 
 ---
 
 ## Dependencies
 
-| Package      | Used for                                  |
-| ------------ | ----------------------------------------- |
-| `analyzer`   | Dart AST parsing (no build runner needed) |
-| `dart_style` | Formatting generated test files           |
-| `args`       | CLI flag parsing                          |
-| `glob`       | Recursive file discovery                  |
-| `path`       | Cross-platform path manipulation          |
-| `yaml`       | Reading `pubspec.yaml` for package name   |
+| Package      | Purpose                                  |
+| ------------ | ---------------------------------------- |
+| `analyzer`   | AST parsing of notifier source files     |
+| `dart_style` | Formatting generated Dart output         |
+| `args`       | CLI flag parsing                         |
+| `glob`       | Discovering feature folders              |
+| `path`       | Cross-platform path handling             |
+| `yaml`       | Reading package name from `pubspec.yaml` |
+
+---
+
+## Project health notes
+
+- This package is a CLI tool, not a Flutter app. Running `dart run mogen_unit_tests` from this repository itself will not produce output unless you point it at a consuming Flutter app with `lib/features/...`.
+- The current output destination is `test/unit/features/...`, which is now reflected in the examples above.

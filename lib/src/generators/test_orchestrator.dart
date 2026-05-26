@@ -33,7 +33,7 @@ class TestOrchestrator {
   /// Scans the project, parses notifiers and state models, and writes tests.
   Future<OrchestratorResult> run() async {
     final featuresRoot = p.join(projectRoot, 'lib', 'features');
-    final testRoot = p.join(projectRoot, 'test', 'features');
+    final testRoot = p.join(projectRoot, 'test');
 
     final scanner = FeatureScanner(featuresRoot: featuresRoot);
     final notifierParser =

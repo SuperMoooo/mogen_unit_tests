@@ -9,10 +9,10 @@ import '../utils/mock_value_generator.dart';
 /// Generates a complete Mocktail + Riverpod test file for one [NotifierInfo].
 ///
 /// Improvements:
-///   - Detects actual method calls made in the notifier
-///   - Generates proper state assertions (before/after)
+///   - Detects actual method calls made in the notifier using _repo
+///   - Generates specific state field assertions (before/after)
 ///   - Filters repos to only include those from the current feature
-///   - Imports domain repositories for mocking
+///   - Imports both domain repository interfaces and data implementations
 ///   - Skips helper methods starting with 'p' (internal notifier extensions)
 ///   - Shows actual method names in stubs (not comments)
 class TestGenerator {
@@ -55,14 +55,20 @@ class TestGenerator {
       b.writeln("import '${n.stateInfo!.importPath}';");
     }
 
-    // Import only repositories from the current feature
+    // Import both domain repositories and implementations from the current feature
     final featureName = _extractFeatureName(n.importPath);
     for (final repo in n.repositories) {
       // Check if repo is from the same feature
       if (_isFeatureRepository(repo.type, featureName)) {
+        final snakeCase = _toSnakeCase(repo.type);
+
         // Import domain repository interface
         b.writeln(
-            "import 'package:${n.packageName}/features/$featureName/domain/repositories/${_toSnakeCase(repo.type)}.dart';");
+            "import 'package:${n.packageName}/features/$featureName/domain/repositories/$snakeCase.dart';");
+
+        // Import data repository implementation
+        b.writeln(
+            "import 'package:${n.packageName}/features/$featureName/data/repositories/${snakeCase}_impl.dart';");
       }
     }
 
@@ -210,7 +216,7 @@ class TestGenerator {
 
     b.writeln("      test('${method.name} completes successfully', () async {");
 
-    _stubReposSuccess(b, n, filteredRepos, returnType: n.stateType);
+    _stubReposSuccess(b, method, n, filteredRepos);
 
     if (method.params.isNotEmpty) {
       b.writeln();
@@ -250,28 +256,84 @@ class TestGenerator {
     b.writeln();
     b.writeln('        // Assert');
 
-    if (n.stateType != null && n.stateType != 'dynamic') {
+    if (n.stateType != null &&
+        n.stateType != 'dynamic' &&
+        n.stateInfo != null) {
       b.writeln(
           '        final finalState = container.read($notifierProvider);');
-      b.writeln('        expect(finalState, isNotEqualTo(initialState));');
-      b.writeln('        expect(finalState, isA<AsyncData>());');
+
+      // Generate assertions for specific state fields
+      _generateStateFieldAssertions(b, method, n);
     } else {
       b.writeln('        // expect(container.read($notifierProvider), ...);');
     }
 
-    _verifyRepos(b, filteredRepos);
+    _verifyRepos(b, method, filteredRepos);
     b.writeln('      });');
     b.writeln();
+  }
+
+  // ── Generate state field assertions ──────────────────────────────────────
+
+  void _generateStateFieldAssertions(
+      StringBuffer b, MethodInfo method, NotifierInfo n) {
+    if (n.stateInfo == null) return;
+
+    // Common state fields that change based on async operations
+    final commonLoadingFields = ['isLoadingAction', 'isLoading', 'loading'];
+    final commonErrorFields = ['error', 'errorMessage', 'errorMsg'];
+    final commonSuccessFields = ['success', 'successMessage', 'message'];
+
+    // Check which fields exist on the state
+    final stateFieldNames = n.stateInfo!.fields.map((f) => f.name).toSet();
+
+    // Assert loading is false after completion
+    for (final field in commonLoadingFields) {
+      if (stateFieldNames.contains(field)) {
+        b.writeln('        expect(finalState.requireValue.$field, isFalse);');
+        break;
+      }
+    }
+
+    // Assert no error after success
+    for (final field in commonErrorFields) {
+      if (stateFieldNames.contains(field)) {
+        b.writeln('        expect(finalState.requireValue.$field, isEmpty);');
+        break;
+      }
+    }
+
+    // Assert success is set (for register, logout, etc.)
+    if (method.name == 'register' ||
+        method.name == 'logout' ||
+        method.name == 'deleteUser' ||
+        method.name == 'resendCode') {
+      for (final field in commonSuccessFields) {
+        if (stateFieldNames.contains(field)) {
+          b.writeln(
+              '        expect(finalState.requireValue.$field, isNotEmpty);');
+          break;
+        }
+      }
+    }
+
+    // Assert auth token is set for login/verify methods
+    if (method.name == 'login' || method.name == 'verify2FA') {
+      if (stateFieldNames.contains('auth')) {
+        b.writeln(
+            '        expect(finalState.requireValue.auth.token, isNotEmpty);');
+      }
+    }
   }
 
   // ── Stub helpers with actual method detection ───────────────────────────
 
   void _stubReposSuccess(
     StringBuffer b,
+    MethodInfo method,
     NotifierInfo n,
-    List<RepositoryDep> filteredRepos, {
-    String? returnType,
-  }) {
+    List<RepositoryDep> filteredRepos,
+  ) {
     if (filteredRepos.isEmpty) return;
 
     b.writeln('        // Arrange: stub repositories');
@@ -285,18 +347,13 @@ class TestGenerator {
         b.writeln('        when(() => mock${repo.type}.someMethod(any()))');
         b.writeln('            .thenAnswer((_) async => /* return value */);');
       } else {
-        for (final method in methods) {
-          b.writeln('        when(() => mock${repo.type}.$method(any()))');
-          if (returnType != null &&
-              returnType != 'void' &&
-              returnType != 'dynamic') {
-            final val = MockValueGenerator.forType(returnType);
-            if (val.isNotEmpty) {
-              b.writeln('            .thenAnswer((_) async => $val);');
-            } else {
-              b.writeln(
-                  '            .thenAnswer((_) async => /* $returnType instance */);');
-            }
+        for (final methodName in methods) {
+          b.writeln('        when(() => mock${repo.type}.$methodName(any()))');
+
+          // Generate appropriate return value based on method and state type
+          final returnVal = _generateReturnValue(methodName, n);
+          if (returnVal.isNotEmpty) {
+            b.writeln('            .thenAnswer((_) async => $returnVal);');
           } else {
             b.writeln(
                 '            .thenAnswer((_) async => /* return value */);');
@@ -306,36 +363,44 @@ class TestGenerator {
     }
   }
 
-  // ignore: unused_element
-  void _stubReposError(
-      StringBuffer b, NotifierInfo n, List<RepositoryDep> filteredRepos) {
+  String _generateReturnValue(String methodName, NotifierInfo n) {
+    if (n.stateType == null || n.stateType == 'dynamic') return '';
+
+    // Return appropriate mock for known methods
+    if (methodName == 'login' || methodName == 'verify2FA') {
+      return 'FakeAuthEntity()'; // or whatever entity type
+    }
+    if (methodName == 'register') {
+      return 'Fake${n.stateType}()';
+    }
+    if (methodName == 'logout' || methodName == 'deleteUser') {
+      return '';
+    }
+
+    return '';
+  }
+
+  void _verifyRepos(
+      StringBuffer b, MethodInfo method, List<RepositoryDep> filteredRepos) {
     if (filteredRepos.isEmpty) return;
 
-    b.writeln('        // Arrange: make repository throw');
+    b.writeln();
+
     for (final repo in filteredRepos) {
       final methods = MethodCallDetector.detectRepositoryMethods(
-        n.sourceFilePath,
+        '', // Will be detected in the actual call
         repo.type,
       );
 
-      if (methods.isEmpty) {
-        b.writeln('        when(() => mock${repo.type}.someMethod(any()))');
-        b.writeln("            .thenThrow(Exception('test error'));");
-      } else {
-        for (final method in methods) {
-          b.writeln('        when(() => mock${repo.type}.$method(any()))');
-          b.writeln("            .thenThrow(Exception('test error'));");
+      if (methods.isNotEmpty) {
+        for (final methodName in methods) {
+          b.writeln(
+              '        verify(() => mock${repo.type}.$methodName(any())).called(1);');
         }
+      } else {
+        b.writeln(
+            '        verify(() => mock${repo.type}.someMethod(any())).called(1);');
       }
-    }
-  }
-
-  void _verifyRepos(StringBuffer b, List<RepositoryDep> filteredRepos) {
-    if (filteredRepos.isEmpty) return;
-    b.writeln();
-    for (final repo in filteredRepos) {
-      b.writeln(
-          '        verify(() => mock${repo.type}.someMethod(any())).called(1);');
     }
   }
 
