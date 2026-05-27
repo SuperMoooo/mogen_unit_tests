@@ -1,5 +1,5 @@
-## [1.0.17]
+## [1.0.18]
 
 ### Fix
 
-- INSTALLATION GUIDE and STATIC ANALYSIS
+- STATIC ANALYSIS
