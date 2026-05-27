@@ -196,10 +196,13 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
   String _lcFirst(String s) =>
       s.isEmpty ? s : s[0].toLowerCase() + s.substring(1);
 
-  List<String> _buildArgumentMatchers(NodeList<Expression> arguments) {
+  List<String> _buildArgumentMatchers(List<Expression> arguments) {
     return arguments.map((argument) {
-      if (argument is NamedExpression) {
-        final argName = argument.name.label.name;
+      // Check if this is a named argument by examining its type
+      if (argument.runtimeType.toString().contains('NamedExpression')) {
+        // For named expressions, access the name and value
+        dynamic namedArg = argument;
+        final argName = namedArg.name.label.name as String;
         return '$argName: ${_anyMatcher(argName)}';
       }
       return _anyMatcher(null);

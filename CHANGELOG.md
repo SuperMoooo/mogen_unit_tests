@@ -1,5 +1,5 @@
-## [1.0.14]
+## [1.0.15]
 
 ### Fix
 
-- On when section now uses the param: any(named:"param") instead of any()
+- STAT ANALYSIS
