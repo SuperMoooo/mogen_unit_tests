@@ -1,5 +1,7 @@
 // Import the generator and models
 // Update these imports to match your actual package structure
+import 'dart:io';
+
 import 'package:mogen_unit_tests/src/generators/test_generator.dart';
 import 'package:mogen_unit_tests/src/models/notifier_info.dart';
 import 'package:test/test.dart';
@@ -449,6 +451,77 @@ void main() {
       // Should NOT include PaymentRepository (different feature)
       expect(output, isNot(contains('class MockPaymentRepository')));
       expect(output, isNot(contains('paymentRepositoryProvider')));
+    });
+
+    test('scopes repository stubs to the current method group only', () {
+      final tempDir = Directory.systemTemp.createTempSync('mogen_test_');
+      try {
+        final file =
+            File('${tempDir.path}${Platform.pathSeparator}auth_notifier.dart');
+        file.writeAsStringSync('''
+class AuthNotifier {
+  final AuthRepository authRepository;
+
+  AuthNotifier(this.authRepository);
+
+  Future<void> login() async {
+    await authRepository.login();
+  }
+
+  Future<void> logout() async {
+    await authRepository.logout();
+  }
+}
+''');
+
+        final notifier = NotifierInfo(
+          className: 'AuthNotifier',
+          sourceFilePath: file.path,
+          importPath:
+              'package:app/features/auth/presentation/notifiers/auth_notifier.dart',
+          packageName: 'app',
+          stateType: 'AuthState',
+          isAsync: true,
+          repositories: const [
+            RepositoryDep(type: 'AuthRepository', name: 'authRepository'),
+          ],
+          buildMethod: null,
+          methods: const [
+            MethodInfo(
+              name: 'login',
+              returnType: 'Future<void>',
+              isAsync: true,
+              params: [],
+            ),
+            MethodInfo(
+              name: 'logout',
+              returnType: 'Future<void>',
+              isAsync: true,
+              params: [],
+            ),
+          ],
+        );
+
+        final output = generator.generate(notifier);
+
+        final loginSection = output.substring(
+          output.indexOf("group('login'"),
+          output.indexOf("group('logout'"),
+        );
+
+        expect(loginSection, contains('mockAuthRepository.login(any'));
+        expect(loginSection, isNot(contains('mockAuthRepository.logout(any')));
+
+        final logoutSection = output.substring(
+          output.indexOf("group('logout'"),
+          output.length,
+        );
+
+        expect(logoutSection, contains('mockAuthRepository.logout(any'));
+        expect(logoutSection, isNot(contains('mockAuthRepository.login(any')));
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
     });
 
     test('does not include error handling test scaffolding', () {

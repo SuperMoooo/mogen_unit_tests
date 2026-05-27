@@ -14,15 +14,17 @@ import 'package:analyzer/dart/ast/visitor.dart';
 class MethodCallDetector {
   /// Parse the notifier source file and extract method calls to a specific repository.
   ///
+  /// If [methodName] is provided, only calls inside that notifier method are returned.
   /// Returns a list of method names called on the repository (e.g., ['login', 'register']).
   static List<String> detectRepositoryMethods(
     String notifierSourcePath,
-    String repoType,
-  ) {
+    String repoType, {
+    String? methodName,
+  }) {
     try {
       final content = File(notifierSourcePath).readAsStringSync();
       final parsed = parseString(content: content, path: notifierSourcePath);
-      final visitor = _MethodCallVisitor(repoType);
+      final visitor = _MethodCallVisitor(repoType, methodName);
       parsed.unit.visitChildren(visitor);
       return visitor.methodCalls.toList();
     } catch (_) {
@@ -32,10 +34,23 @@ class MethodCallDetector {
 }
 
 class _MethodCallVisitor extends RecursiveAstVisitor<void> {
-  _MethodCallVisitor(this.repoType);
+  _MethodCallVisitor(this.repoType, this.methodName);
 
   final String repoType;
+  final String? methodName;
   final Set<String> methodCalls = {};
+
+  @override
+  void visitMethodDeclaration(MethodDeclaration node) {
+    if (methodName == null) {
+      super.visitMethodDeclaration(node);
+      return;
+    }
+
+    if (node.name.lexeme == methodName) {
+      node.body.visitChildren(this);
+    }
+  }
 
   @override
   void visitMethodInvocation(MethodInvocation node) {

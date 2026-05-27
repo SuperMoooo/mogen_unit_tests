@@ -23,7 +23,6 @@
 ///     └── features/
 ///         └── cart/
 ///             └── cart_notifier_test.dart
-///
 /// ```
 ///
 /// ---
@@ -33,7 +32,6 @@
 /// ```dart
 /// import 'package:riverpod_annotation/riverpod_annotation.dart';
 /// import '../../states/cart_state.dart';
-/// import '../../../data/repositories/cart_repository_impl.dart';
 ///
 /// part 'cart_notifier.g.dart';
 ///
@@ -71,12 +69,11 @@
 ///
 /// import 'package:my_app/features/cart/presentation/notifiers/cart_notifier.dart';
 /// import 'package:my_app/features/cart/presentation/states/cart_state.dart';
-/// import 'package:my_app/features/cart/data/repositories/cart_repository_impl.dart';
+/// import 'package:my_app/features/cart/domain/repositories/cart_repository.dart';
+/// /// import 'package:my_app/features/cart/data/repositories/cart_repository_impl.dart';
 ///
-/// // ── Mocks ────────────────────────────────────────────────────────────────
 /// class MockCartRepository extends Mock implements CartRepository {}
 ///
-/// // ── Fakes (registerFallbackValue) ────────────────────────────────────────
 /// class FakeCartItem extends Fake implements CartItem {}
 ///
 /// void main() {
@@ -101,94 +98,45 @@
 ///       container.dispose();
 ///     });
 ///
-///     // ── build() ──────────────────────────────────────────────────────────
-///     group('build', () {
-///       test('returns CartState successfully', () async {
-///         // Arrange: stub repositories
-///         // when(() => mockCartRepository.fetchCart())
-///         //     .thenAnswer((_) async => CartState(items: [], total: 0.0));
-///
-///         final result = await container.read(cartNotifierProvider.future);
-///
-///         expect(result, isA<CartState>());
-///       });
-///
-///       test('emits error when repository throws', () async {
-///         // when(() => mockCartRepository.fetchCart())
-///         //     .thenThrow(Exception('test error'));
-///
-///         await container
-///             .read(cartNotifierProvider.future)
-///             .catchError((_) {});
-///
-///         expect(container.read(cartNotifierProvider), isA<AsyncError>());
-///       });
-///     });
-///
-///     // ── addItem() ────────────────────────────────────────────────────────
 ///     group('addItem', () {
 ///       test('addItem completes successfully', () async {
+///         when(() => mockCartRepository.addItem(any()))
+///             .thenAnswer((_) async => null);
+///
 ///         final item = FakeCartItem();
 ///
 ///         await container.read(cartNotifierProvider.future);
 ///         await container.read(cartNotifierProvider.notifier).addItem(item);
+///         final finalState = container.read(cartNotifierProvider);
 ///
-///         // verify(() => mockCartRepository.addItem(any())).called(1);
-///       });
-///
-///       test('addItem handles error from repository', () async {
-///         // when(() => mockCartRepository.addItem(any()))
-///         //     .thenThrow(Exception('test error'));
-///         final item = FakeCartItem();
-///
-///         await container.read(cartNotifierProvider.future).catchError((_) {});
-///
-///         expect(
-///           () async => container
-///               .read(cartNotifierProvider.notifier)
-///               .addItem(item),
-///           throwsA(isA<Exception>()),
-///         );
+///         expect(finalState.requireValue.error, isNull);
+///         expect(finalState.requireValue.isLoadingAction, isFalse);
 ///       });
 ///     });
 ///
-///     // ── removeItem() ─────────────────────────────────────────────────────
 ///     group('removeItem', () {
 ///       test('removeItem completes successfully', () async {
-///         final itemId = '';
+///         when(() => mockCartRepository.removeItem(any()))
+///             .thenAnswer((_) async => null);
+///
+///         const itemId = '';
 ///
 ///         await container.read(cartNotifierProvider.future);
 ///         await container
 ///             .read(cartNotifierProvider.notifier)
 ///             .removeItem(itemId);
-///       });
 ///
-///       test('removeItem handles error from repository', () async {
-///         final itemId = '';
+///         final finalState = container.read(cartNotifierProvider);
 ///
-///         await container.read(cartNotifierProvider.future).catchError((_) {});
-///
-///         expect(
-///           () async => container
-///               .read(cartNotifierProvider.notifier)
-///               .removeItem(itemId),
-///           throwsA(isA<Exception>()),
-///         );
+///         expect(finalState.requireValue.error, isNull);
+///         expect(finalState.requireValue.isLoadingAction, isFalse);
 ///       });
 ///     });
 ///   });
 /// }
 /// ```
-library;
 
-// After installing, run from your Flutter project root:
-//
-//   dart run mogen_unit_tests
-//
-// Options:
-//   --dry-run    Preview output without writing files
-//   --verbose    Print detailed progress
-//   --root       Path to project root (defaults to current directory)
+library;
 
 void main() {
   print('Run `dart run mogen_unit_tests` from your Flutter project root.');
