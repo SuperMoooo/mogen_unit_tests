@@ -12,18 +12,29 @@ import 'package:analyzer/dart/ast/visitor.dart';
 ///   - final auth = await _repo.login(...)
 ///   - ref.read(authRepositoryProvider).login(...)
 class RepositoryMethodCall {
+  /// Creates a repository method call matcher.
+  ///
+  /// [methodName] is the repository method name being invoked.
+  /// [argumentMatchers] is the list of matcher expressions for the method call arguments.
   const RepositoryMethodCall({
     required this.methodName,
     required this.argumentMatchers,
   });
 
+  /// The repository method name being invoked.
   final String methodName;
+
+  /// The generated matcher expression for each call argument.
   final List<String> argumentMatchers;
 
+  /// Returns the matcher arguments joined into a single string.
   String get matcherArgs => argumentMatchers.join(', ');
+
+  /// Returns the full invocation source for this repository method call.
   String get invocationSource => '$methodName($matcherArgs)';
 }
 
+/// Detects method calls to a specific repository type within a notifier source file.
 class MethodCallDetector {
   /// Parse the notifier source file and extract method calls to a specific repository.
   ///
@@ -196,7 +207,7 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
   String _lcFirst(String s) =>
       s.isEmpty ? s : s[0].toLowerCase() + s.substring(1);
 
-  List<String> _buildArgumentMatchers(List<Expression> arguments) {
+  List<String> _buildArgumentMatchers(NodeList<Expression> arguments) {
     return arguments.map((argument) {
       // Check if this is a named argument by examining its type
       if (argument.runtimeType.toString().contains('NamedExpression')) {
