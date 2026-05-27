@@ -91,7 +91,8 @@ class TestGenerator {
   // ── main() ───────────────────────────────────────────────────────────────
 
   void _mainBlock(StringBuffer b, NotifierInfo n) {
-    b.writeln('void main() {');
+    b.writeln('void main() {\n');
+    b.write("TestWidgetsFlutterBinding.ensureInitialized();\n\n");
     _group(b, n);
     b.writeln('}');
   }
@@ -109,7 +110,6 @@ class TestGenerator {
     b.writeln('    late ProviderContainer container;');
     b.writeln();
 
-    _setUpAll(b, n);
     _setUp(b, n, filteredRepos);
     _tearDown(b);
 
@@ -122,20 +122,6 @@ class TestGenerator {
     }
 
     b.writeln('  });');
-  }
-
-  // ── setUpAll ─────────────────────────────────────────────────────────────
-
-  void _setUpAll(StringBuffer b, NotifierInfo n) {
-    final types = _complexParamTypes(n);
-    if (types.isEmpty) return;
-
-    b.writeln('    setUpAll(() {');
-    for (final t in types) {
-      b.writeln('      registerFallbackValue(Fake$t());');
-    }
-    b.writeln('    });');
-    b.writeln();
   }
 
   // ── setUp ────────────────────────────────────────────────────────────────
@@ -298,22 +284,23 @@ class TestGenerator {
     b.writeln('        // Arrange: stub repositories');
     for (final repo in filteredRepos) {
       // Detect only methods actually called in the notifier method under test.
-      final methods = MethodCallDetector.detectRepositoryMethods(
+      final calls = MethodCallDetector.detectRepositoryMethodCalls(
         n.sourceFilePath,
         repo.type,
         methodName: method.name,
       );
 
-      if (methods.isEmpty) {
+      if (calls.isEmpty) {
         // If no methods detected, just return a comment
         b.writeln('        // No mocks needed for ${repo.type}');
       } else {
         // Only stub the methods that are actually called
-        for (final methodName in methods) {
-          b.writeln('        when(() => mock${repo.type}.$methodName(any()))');
+        for (final call in calls) {
+          b.writeln(
+              '        when(() => mock${repo.type}.${call.invocationSource})');
 
           // Generate appropriate return value based on method
-          final returnVal = _generateRealEntityConstructor(methodName, n);
+          final returnVal = _generateRealEntityConstructor(call.methodName, n);
           if (returnVal.isNotEmpty) {
             b.writeln('            .thenAnswer((_) async => $returnVal);');
           } else {
@@ -331,41 +318,6 @@ class TestGenerator {
     // method without inspecting repository interfaces. Default to a generic null
     // stub so generated tests remain feature-agnostic.
     return '';
-  }
-
-  // ── Utilities ─────────────────────────────────────────────────────────────
-
-  Set<String> _complexParamTypes(NotifierInfo n) {
-    final types = <String>{};
-
-    void collect(String rawType) {
-      final t = rawType.replaceAll('?', '').trim();
-      if (t.startsWith('List<')) {
-        final inner = RegExp(r'List<(.+)>').firstMatch(t)?.group(1);
-        if (inner != null) collect(inner);
-        return;
-      }
-      if (!MockValueGenerator.isPrimitive(t) &&
-          !t.startsWith('Future') &&
-          !t.startsWith('Stream') &&
-          t != 'dynamic') {
-        types.add(t);
-      }
-    }
-
-    for (final m in n.methods) {
-      for (final p in m.params) collect(p.type);
-    }
-    if (n.buildMethod != null) {
-      for (final p in n.buildMethod!.params) collect(p.type);
-    }
-    if (n.stateInfo != null) {
-      for (final f in n.stateInfo!.fields) {
-        if (f.isList && f.listItemType != null) collect(f.listItemType!);
-      }
-    }
-
-    return types;
   }
 
   String _buildArgList(List<ParamInfo> params) => params.map((p) {

@@ -1,6 +1,5 @@
-## [1.0.13]
+## [1.0.14]
 
 ### Fix
 
-- Not calling every feature method in every test
-- Readme and example
+- On when section now uses the param: any(named:"param") instead of any()

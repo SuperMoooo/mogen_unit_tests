@@ -11,12 +11,24 @@ import 'package:analyzer/dart/ast/visitor.dart';
 ///   - _repo.login(...)
 ///   - final auth = await _repo.login(...)
 ///   - ref.read(authRepositoryProvider).login(...)
+class RepositoryMethodCall {
+  const RepositoryMethodCall({
+    required this.methodName,
+    required this.argumentMatchers,
+  });
+
+  final String methodName;
+  final List<String> argumentMatchers;
+
+  String get matcherArgs => argumentMatchers.join(', ');
+  String get invocationSource => '$methodName($matcherArgs)';
+}
+
 class MethodCallDetector {
   /// Parse the notifier source file and extract method calls to a specific repository.
   ///
   /// If [methodName] is provided, only calls inside that notifier method are returned.
-  /// Returns a list of method names called on the repository (e.g., ['login', 'register']).
-  static List<String> detectRepositoryMethods(
+  static List<RepositoryMethodCall> detectRepositoryMethodCalls(
     String notifierSourcePath,
     String repoType, {
     String? methodName,
@@ -26,10 +38,23 @@ class MethodCallDetector {
       final parsed = parseString(content: content, path: notifierSourcePath);
       final visitor = _MethodCallVisitor(repoType, methodName);
       parsed.unit.visitChildren(visitor);
-      return visitor.methodCalls.toList();
+      return visitor.methodCalls.values.toList();
     } catch (_) {
       return [];
     }
+  }
+
+  /// Backwards-compatible helper for callers that only need method names.
+  static List<String> detectRepositoryMethods(
+    String notifierSourcePath,
+    String repoType, {
+    String? methodName,
+  }) {
+    return detectRepositoryMethodCalls(
+      notifierSourcePath,
+      repoType,
+      methodName: methodName,
+    ).map((call) => call.methodName).toList();
   }
 }
 
@@ -38,7 +63,7 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
 
   final String repoType;
   final String? methodName;
-  final Set<String> methodCalls = {};
+  final Map<String, RepositoryMethodCall> methodCalls = {};
 
   @override
   void visitMethodDeclaration(MethodDeclaration node) {
@@ -56,22 +81,17 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
   void visitMethodInvocation(MethodInvocation node) {
     super.visitMethodInvocation(node);
 
-    // Pattern 1: _repo.methodName(...)
-    if (_isDirectRepoCall(node)) {
-      methodCalls.add(node.methodName.name);
-      return;
-    }
-
-    // Pattern 2: ref.read(repositoryProvider).methodName(...)
-    if (_isRefReadCall(node)) {
-      methodCalls.add(node.methodName.name);
-      return;
-    }
-
-    // Pattern 3: Direct field reference this.repository.methodName(...)
-    if (_isFieldRepositoryCall(node)) {
-      methodCalls.add(node.methodName.name);
-      return;
+    if (_isDirectRepoCall(node) ||
+        _isRefReadCall(node) ||
+        _isFieldRepositoryCall(node)) {
+      final callName = node.methodName.name;
+      methodCalls.putIfAbsent(
+        callName,
+        () => RepositoryMethodCall(
+          methodName: callName,
+          argumentMatchers: _buildArgumentMatchers(node.argumentList.arguments),
+        ),
+      );
     }
   }
 
@@ -175,4 +195,19 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
   /// e.g., "AuthRepository" -> "authRepository"
   String _lcFirst(String s) =>
       s.isEmpty ? s : s[0].toLowerCase() + s.substring(1);
+
+  List<String> _buildArgumentMatchers(NodeList<Expression> arguments) {
+    return arguments.map((argument) {
+      if (argument is NamedExpression) {
+        final argName = argument.name.label.name;
+        return '$argName: ${_anyMatcher(argName)}';
+      }
+      return _anyMatcher(null);
+    }).toList();
+  }
+
+  String _anyMatcher(String? name) {
+    if (name == null) return 'any()';
+    return "any(named: '$name')";
+  }
 }

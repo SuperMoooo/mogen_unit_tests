@@ -509,16 +509,69 @@ class AuthNotifier {
           output.indexOf("group('logout'"),
         );
 
-        expect(loginSection, contains('mockAuthRepository.login(any'));
-        expect(loginSection, isNot(contains('mockAuthRepository.logout(any')));
+        expect(loginSection, contains('mockAuthRepository.login()'));
+        expect(loginSection, isNot(contains('mockAuthRepository.logout()')));
 
         final logoutSection = output.substring(
           output.indexOf("group('logout'"),
           output.length,
         );
 
-        expect(logoutSection, contains('mockAuthRepository.logout(any'));
-        expect(logoutSection, isNot(contains('mockAuthRepository.login(any')));
+        expect(logoutSection, contains('mockAuthRepository.logout()'));
+        expect(logoutSection, isNot(contains('mockAuthRepository.login()')));
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    test('uses repository call named arguments when stubbing', () {
+      final tempDir = Directory.systemTemp.createTempSync('mogen_test_');
+      try {
+        final file =
+            File('${tempDir.path}${Platform.pathSeparator}auth_notifier.dart');
+        file.writeAsStringSync('''
+class AuthNotifier {
+  final AuthRepository authRepository;
+
+  AuthNotifier(this.authRepository);
+
+  Future<void> login({required String email, required String password}) async {
+    await authRepository.login(email: email, password: password);
+  }
+}
+''');
+
+        final notifier = NotifierInfo(
+          className: 'AuthNotifier',
+          sourceFilePath: file.path,
+          importPath:
+              'package:app/features/auth/presentation/notifiers/auth_notifier.dart',
+          packageName: 'app',
+          stateType: 'AuthState',
+          isAsync: true,
+          repositories: const [
+            RepositoryDep(type: 'AuthRepository', name: 'authRepository'),
+          ],
+          buildMethod: null,
+          methods: const [
+            MethodInfo(
+              name: 'login',
+              returnType: 'Future<void>',
+              isAsync: true,
+              params: [
+                ParamInfo(name: 'email', type: 'String', isNamed: true),
+                ParamInfo(name: 'password', type: 'String', isNamed: true),
+              ],
+            ),
+          ],
+        );
+
+        final output = generator.generate(notifier);
+
+        expect(output, contains('when('));
+        expect(output, contains('mockAuthRepository.login('));
+        expect(output, contains("email: any(named: 'email')"));
+        expect(output, contains("password: any(named: 'password')"));
       } finally {
         tempDir.deleteSync(recursive: true);
       }
