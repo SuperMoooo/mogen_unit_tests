@@ -209,11 +209,8 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
 
   List<String> _buildArgumentMatchers(NodeList<Expression> arguments) {
     return arguments.map((argument) {
-      // Check if this is a named argument by examining its type
-      if (argument.runtimeType.toString().contains('NamedExpression')) {
-        // For named expressions, access the name and value
-        dynamic namedArg = argument;
-        final argName = namedArg.name.label.name as String;
+      if (argument is NamedExpression) {
+        final argName = argument.name.label.name;
         return '$argName: ${_anyMatcher(argName)}';
       }
       return _anyMatcher(null);
