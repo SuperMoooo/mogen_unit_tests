@@ -100,7 +100,8 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
         callName,
         () => RepositoryMethodCall(
           methodName: callName,
-          argumentMatchers: _buildArgumentMatchers(node.argumentList.arguments),
+          argumentMatchers:
+              _buildArgumentMatchers(node.argumentList.arguments.toList()),
         ),
       );
     }
@@ -207,14 +208,8 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
   String _lcFirst(String s) =>
       s.isEmpty ? s : s[0].toLowerCase() + s.substring(1);
 
-  List<String> _buildArgumentMatchers(NodeList<Expression> arguments) {
-    return arguments.map((argument) {
-      if (argument is NamedExpression) {
-        final argName = argument.name.label.name;
-        return '$argName: ${_anyMatcher(argName)}';
-      }
-      return _anyMatcher(null);
-    }).toList();
+  List<String> _buildArgumentMatchers(List<Expression> arguments) {
+    return arguments.map((_) => _anyMatcher(null)).toList();
   }
 
   String _anyMatcher(String? name) {
