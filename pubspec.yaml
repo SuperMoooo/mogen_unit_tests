@@ -1,6 +1,6 @@
 name: mogen_unit_tests
 description: Scans Riverpod AsyncNotifier classes and auto-generates Mocktail unit tests.
-version: 1.0.18
+version: 1.0.19
 homepage: https://supermoooo.github.io/Portfolio/
 repository: https://github.com/SuperMoooo/mogen_unit_tests
 environment:

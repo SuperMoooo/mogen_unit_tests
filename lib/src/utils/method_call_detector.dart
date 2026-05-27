@@ -208,7 +208,7 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
   String _lcFirst(String s) =>
       s.isEmpty ? s : s[0].toLowerCase() + s.substring(1);
 
-  List<String> _buildArgumentMatchers(List<Expression> arguments) {
+  List<String> _buildArgumentMatchers(List<Expression?> arguments) {
     return arguments.map((_) => _anyMatcher(null)).toList();
   }
 
