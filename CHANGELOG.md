@@ -1,5 +1,5 @@
-## [1.0.21]
+## [1.0.22]
 
-### Fix
+### Feat
 
-- STATIC ANALYSIS
+- Feature flag to generate only tests for a specific feature

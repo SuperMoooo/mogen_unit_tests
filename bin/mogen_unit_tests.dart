@@ -8,7 +8,7 @@ import 'package:mogen_unit_tests/mogen_unit_tests.dart';
 import 'package:path/path.dart' as p;
 import 'package:yaml/yaml.dart';
 
-const _version = '1.0.21';
+const _version = '1.0.22';
 
 Future<void> main(List<String> arguments) async {
   final parser = ArgParser()
@@ -40,6 +40,11 @@ Future<void> main(List<String> arguments) async {
       abbr: 'h',
       negatable: false,
       help: 'Show this help message.',
+    )
+    ..addOption(
+      'feature',
+      abbr: 'f',
+      help: 'Only generate tests for the given feature name.',
     );
 
   late final ArgResults args;
@@ -95,11 +100,13 @@ Future<void> main(List<String> arguments) async {
 
   final dryRun = args['dry-run'] as bool;
   final verbose = args['verbose'] as bool;
+  final feature = args['feature'] as String?;
 
   _printBanner();
   print('Package  : $packageName');
   print('Root     : $root');
   print('Features : ${featuresDir.path}');
+  if (feature != null && feature.isNotEmpty) print('Feature  : $feature');
   print('Output   : ${p.join(root, 'test', 'features')}');
   if (dryRun) print('Mode     : dry-run (no files will be written)');
   print('');
@@ -109,6 +116,7 @@ Future<void> main(List<String> arguments) async {
     packageName: packageName,
     dryRun: dryRun,
     verbose: verbose,
+    feature: feature,
   );
 
   final result = await orchestrator.run();

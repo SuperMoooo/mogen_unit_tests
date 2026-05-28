@@ -16,6 +16,7 @@ class TestOrchestrator {
     required this.packageName,
     this.dryRun = false,
     this.verbose = false,
+    this.feature,
   });
 
   /// Absolute path to the project root.
@@ -30,6 +31,9 @@ class TestOrchestrator {
   /// When `true`, progress messages are emitted during execution.
   final bool verbose;
 
+  /// If non-null, only generate tests for this feature name.
+  final String? feature;
+
   /// Scans the project, parses notifiers and state models, and writes tests.
   Future<OrchestratorResult> run() async {
     final featuresRoot = p.join(projectRoot, 'lib', 'features');
@@ -42,7 +46,10 @@ class TestOrchestrator {
         StateParser(projectRoot: projectRoot, packageName: packageName);
     final generator = TestGenerator();
 
-    final bundles = scanner.scan();
+    var bundles = scanner.scan();
+    if (feature != null && feature!.isNotEmpty) {
+      bundles = bundles.where((b) => b.featureName == feature).toList();
+    }
     _log('Found ${bundles.length} feature(s)\n');
 
     int written = 0;
