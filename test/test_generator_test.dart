@@ -11,7 +11,7 @@ void main() {
     late TestGenerator generator;
 
     setUp(() {
-      generator = TestGenerator();
+      generator = TestGenerator(projectRoot: ".");
     });
 
     test('generates feature-scoped imports and omits non-feature repositories',

@@ -16,9 +16,11 @@ class RepositoryMethodCall {
   ///
   /// [methodName] is the repository method name being invoked.
   /// [argumentMatchers] is the list of matcher expressions for the method call arguments.
+  /// [returnType] is the declared return type resolved from the repository interface, if available.
   const RepositoryMethodCall({
     required this.methodName,
     required this.argumentMatchers,
+    this.returnType,
   });
 
   /// The repository method name being invoked.
@@ -26,6 +28,10 @@ class RepositoryMethodCall {
 
   /// The generated matcher expression for each call argument.
   final List<String> argumentMatchers;
+
+  /// The declared return type of this repository method, e.g. `Future<UserEntity>`.
+  /// Null when the return type could not be resolved.
+  final String? returnType;
 
   /// Returns the matcher arguments joined into a single string.
   String get matcherArgs => argumentMatchers.join(', ');
@@ -67,7 +73,45 @@ class MethodCallDetector {
       methodName: methodName,
     ).map((call) => call.methodName).toList();
   }
+
+  /// Resolves the declared return type of [methodName] by parsing the repository
+  /// interface source file at [repoSourcePath].
+  ///
+  /// Returns `null` when the file cannot be read or the method is not found.
+  static String? resolveReturnType(
+    String repoSourcePath,
+    String methodName,
+  ) {
+    try {
+      final content = File(repoSourcePath).readAsStringSync();
+      final parsed = parseString(content: content, path: repoSourcePath);
+      final visitor = _ReturnTypeVisitor(methodName);
+      parsed.unit.visitChildren(visitor);
+      return visitor.returnType;
+    } catch (_) {
+      return null;
+    }
+  }
 }
+
+// ─── Return-type resolver ────────────────────────────────────────────────────
+
+class _ReturnTypeVisitor extends RecursiveAstVisitor<void> {
+  _ReturnTypeVisitor(this.targetMethod);
+
+  final String targetMethod;
+  String? returnType;
+
+  @override
+  void visitMethodDeclaration(MethodDeclaration node) {
+    if (node.name.lexeme == targetMethod) {
+      returnType = node.returnType?.toSource();
+    }
+    super.visitMethodDeclaration(node);
+  }
+}
+
+// ─── Method-call visitor ─────────────────────────────────────────────────────
 
 class _MethodCallVisitor extends RecursiveAstVisitor<void> {
   _MethodCallVisitor(this.repoType, this.methodName);
@@ -106,13 +150,12 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
     }
   }
 
-  /// Checks if this is a direct _repo.methodName() call
+  /// Checks if this is a direct _repo.methodName() call.
   bool _isDirectRepoCall(MethodInvocation node) {
     final target = node.target;
 
     if (target is SimpleIdentifier) {
       final varName = target.name;
-      // Look for _repo, repo, _repository, repository patterns
       return varName == '_repo' ||
           varName == 'repo' ||
           varName == '_repository' ||
@@ -123,49 +166,40 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
     return false;
   }
 
-  /// Checks if this is a ref.read(repositoryProvider).methodName() call
+  /// Checks if this is a ref.read(repositoryProvider).methodName() call.
   bool _isRefReadCall(MethodInvocation node) {
     final target = node.target;
 
     if (target is MethodInvocation) {
       final targetMethod = target.methodName.name;
 
-      // Check if it's ref.read() or ref.watch()
-      if (targetMethod != 'read' && targetMethod != 'watch') {
-        return false;
-      }
+      if (targetMethod != 'read' && targetMethod != 'watch') return false;
 
       final refTarget = target.target?.toSource();
-      if (refTarget != 'ref' && refTarget != '_ref') {
-        return false;
-      }
+      if (refTarget != 'ref' && refTarget != '_ref') return false;
 
-      // Get the provider expression argument
       final args = target.argumentList.arguments;
       if (args.isEmpty) return false;
 
       final providerExpr =
           args.first.toSource().replaceAll(RegExp(r'\.notifier\b'), '').trim();
 
-      // Check if provider matches the repository type
       return _providerMatchesRepo(providerExpr);
     }
 
     return false;
   }
 
-  /// Checks if this is a field/getter repository call like this.repository.methodName()
+  /// Checks if this is a field/getter repository call like this.repository.methodName().
   bool _isFieldRepositoryCall(MethodInvocation node) {
     final target = node.target;
 
     if (target is PropertyAccess) {
       final propertyName = target.propertyName.name;
 
-      // Check if the property is a repository-like name
       if (_isRepositoryVariable(propertyName, repoType)) {
         final object = target.target;
 
-        // Check if it's accessed on 'this' or '_repo'
         if (object is SimpleIdentifier &&
             (object.name == 'this' ||
                 object.name == '_repo' ||
@@ -178,16 +212,12 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
     return false;
   }
 
-  /// Converts provider expression to repository type name
-  /// e.g., "authRepositoryProvider" -> "AuthRepository"
   bool _providerMatchesRepo(String providerExpr) {
     final cleaned = providerExpr.replaceAll('Provider', '').trim();
     final typeFromProvider = _camelToTitle(cleaned);
     return typeFromProvider == repoType;
   }
 
-  /// Checks if a variable name corresponds to the repository type
-  /// e.g., "authRepository" matches "AuthRepository"
   bool _isRepositoryVariable(String varName, String repoType) {
     final typeName = _camelToTitle(varName);
     return typeName == repoType ||
@@ -195,24 +225,22 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
         varName == '_${_lcFirst(repoType)}';
   }
 
-  /// Converts camelCase to TitleCase
-  /// e.g., "authRepository" -> "AuthRepository"
   String _camelToTitle(String camel) {
     if (camel.isEmpty) return camel;
     return camel[0].toUpperCase() + camel.substring(1);
   }
 
-  /// Converts TitleCase to camelCase
-  /// e.g., "AuthRepository" -> "authRepository"
   String _lcFirst(String s) =>
       s.isEmpty ? s : s[0].toLowerCase() + s.substring(1);
 
-  List<String> _buildArgumentMatchers(Iterable arguments) {
-    return arguments.map((_) => _anyMatcher(null)).toList();
-  }
-
-  String _anyMatcher(String? name) {
-    if (name == null) return 'any()';
-    return "any(named: '$name')";
+  /// Builds argument matchers, emitting `any(named: 'x')` for named arguments
+  /// and `any()` for positional ones.
+  List<String> _buildArgumentMatchers(NodeList<Expression> arguments) {
+    return arguments.map((arg) {
+      if (arg is NamedExpression) {
+        return "any(named: '${arg.name.label.name}')";
+      }
+      return 'any()';
+    }).toList();
   }
 }

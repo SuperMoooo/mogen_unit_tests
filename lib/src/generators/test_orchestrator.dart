@@ -1,3 +1,5 @@
+// lib/src/generators/test_orchestrator.dart
+
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -44,7 +46,10 @@ class TestOrchestrator {
         NotifierParser(projectRoot: projectRoot, packageName: packageName);
     final stateParser =
         StateParser(projectRoot: projectRoot, packageName: packageName);
-    final generator = TestGenerator();
+
+    // Pass projectRoot so the generator can locate repository interface files
+    // for return-type resolution.
+    final generator = TestGenerator(projectRoot: projectRoot);
 
     var bundles = scanner.scan();
     if (feature != null && feature!.isNotEmpty) {

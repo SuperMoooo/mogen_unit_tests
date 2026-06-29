@@ -1,6 +1,7 @@
 // lib/src/generators/test_generator.dart
 
 import 'package:dart_style/dart_style.dart';
+import 'package:path/path.dart' as p;
 
 import '../models/notifier_info.dart';
 import '../utils/method_call_detector.dart';
@@ -15,7 +16,20 @@ import '../utils/mock_value_generator.dart';
 ///   - Generates specific state field assertions (before/after)
 ///   - Imports only relevant domain repository interfaces
 ///   - Skips helper methods starting with 'p' (internal notifier extensions)
+///   - Emits `any(named: 'x')` for named arguments in stubs
+///   - Resolves repository method return types and emits correct stub values:
+///       void / Future<void>  → null
+///       primitives           → literal (e.g. '', 0, false)
+///       nullable types       → null
+///       custom entity types  → ClassName.empty()
 class TestGenerator {
+  /// Creates a generator.  [projectRoot] is needed to locate repository
+  /// interface files for return-type resolution.
+  TestGenerator({required this.projectRoot});
+
+  /// Absolute path to the Flutter project root.
+  final String projectRoot;
+
   final _fmt =
       DartFormatter(languageVersion: DartFormatter.latestLanguageVersion);
 
@@ -45,22 +59,21 @@ class TestGenerator {
     b.writeln("import 'package:mocktail/mocktail.dart';");
     b.writeln();
 
-    // Import the notifier itself
+    // Import the notifier itself.
     b.writeln("import '${n.importPath}';");
 
-    // Import the state if available
+    // Import the state if available.
     if (n.stateInfo != null) {
       b.writeln("import '${n.stateInfo!.importPath}';");
     }
 
-    // Import only repository interfaces from the current feature
+    // Import only repository interfaces from the current feature.
     final featureName = _extractFeatureName(n.importPath);
     final filteredRepos =
         _featureRepositories(n).where((r) => _isRepositoryInterface(r.type));
 
     for (final repo in filteredRepos) {
       final snakeCase = _toSnakeCase(repo.type);
-      // Import only the domain and data repository files, not services/datasources
       b.writeln(
           "import 'package:${n.packageName}/features/$featureName/domain/repositories/$snakeCase.dart';");
       b.writeln(
@@ -92,7 +105,7 @@ class TestGenerator {
 
   void _mainBlock(StringBuffer b, NotifierInfo n) {
     b.writeln('void main() {\n');
-    b.write("TestWidgetsFlutterBinding.ensureInitialized();\n\n");
+    b.write('TestWidgetsFlutterBinding.ensureInitialized();\n\n');
     _group(b, n);
     b.writeln('}');
   }
@@ -184,7 +197,6 @@ class TestGenerator {
 
     b.writeln("      test('${method.name} completes successfully', () async {");
 
-    // Only stub methods actually called in the notifier
     _stubOnlyCalledMethods(b, method, n, filteredRepos);
 
     if (method.params.isNotEmpty) {
@@ -221,8 +233,6 @@ class TestGenerator {
         n.stateInfo != null) {
       b.writeln(
           '        final finalState = container.read($notifierProvider);');
-
-      // Generate assertions for specific state fields
       _generateStateFieldAssertions(b, method, n);
     } else {
       b.writeln('        // expect(container.read($notifierProvider), ...);');
@@ -238,15 +248,12 @@ class TestGenerator {
       StringBuffer b, MethodInfo method, NotifierInfo n) {
     if (n.stateInfo == null) return;
 
-    // Common state fields that change based on async operations
     final commonLoadingFields = ['isLoadingAction', 'isLoading', 'loading'];
     final commonErrorFields = ['error', 'errorMessage', 'errorMsg'];
     final commonSuccessFields = ['success', 'successMessage', 'message'];
 
-    // Check which fields exist on the state
     final stateFieldNames = n.stateInfo!.fields.map((f) => f.name).toSet();
 
-    // Assert loading is false after completion
     for (final field in commonLoadingFields) {
       if (stateFieldNames.contains(field)) {
         b.writeln('        expect(finalState.requireValue.$field, isFalse);');
@@ -254,7 +261,6 @@ class TestGenerator {
       }
     }
 
-    // Assert no error after success
     for (final field in commonErrorFields) {
       if (stateFieldNames.contains(field)) {
         b.writeln('        expect(finalState.requireValue.$field, isNull);');
@@ -262,11 +268,10 @@ class TestGenerator {
       }
     }
 
-    // Assert success fields are reset after a successful operation.
     for (final field in commonSuccessFields) {
       if (stateFieldNames.contains(field)) {
         b.writeln('        expect(finalState.requireValue.$field, isNull);');
-        break; // Found the matching success field, stop looping
+        break;
       }
     }
   }
@@ -283,7 +288,6 @@ class TestGenerator {
 
     b.writeln('        // Arrange: stub repositories');
     for (final repo in filteredRepos) {
-      // Detect only methods actually called in the notifier method under test.
       final calls = MethodCallDetector.detectRepositoryMethodCalls(
         n.sourceFilePath,
         repo.type,
@@ -291,34 +295,58 @@ class TestGenerator {
       );
 
       if (calls.isEmpty) {
-        // If no methods detected, just return a comment
         b.writeln('        // No mocks needed for ${repo.type}');
       } else {
-        // Only stub the methods that are actually called
+        final repoInterfacePath = _repositoryInterfacePath(repo, n);
+
         for (final call in calls) {
           b.writeln(
               '        when(() => mock${repo.type}.${call.invocationSource})');
 
-          // Generate appropriate return value based on method
-          final returnVal = _generateRealEntityConstructor(call.methodName, n);
-          if (returnVal.isNotEmpty) {
-            b.writeln('            .thenAnswer((_) async => $returnVal);');
-          } else {
-            b.writeln('            .thenAnswer((_) async => null);');
-          }
+          final returnType = MethodCallDetector.resolveReturnType(
+            repoInterfacePath,
+            call.methodName,
+          );
+          final returnVal = _stubReturnValue(returnType);
+          b.writeln('            .thenAnswer((_) async => $returnVal);');
         }
       }
     }
   }
 
-  // ── Generate repository stub values ────────────────────────────────────
+  // ── Stub return value resolution ─────────────────────────────────────────
 
-  String _generateRealEntityConstructor(String methodName, NotifierInfo n) {
-    // We cannot reliably infer a feature-specific return value for every repository
-    // method without inspecting repository interfaces. Default to a generic null
-    // stub so generated tests remain feature-agnostic.
-    return '';
+  /// Returns a Dart literal suitable for the `thenAnswer` stub return value,
+  /// derived from the repository method's declared [returnType].
+  ///
+  ///   - null / unknown                → `null`
+  ///   - `void` / `Future<void>`       → `null`
+  ///   - nullable types (`T?`)         → `null`
+  ///   - primitive types               → literal (`''`, `0`, `false`, …)
+  ///   - custom / entity class         → `ClassName.empty()`
+  String _stubReturnValue(String? returnType) {
+    if (returnType == null) return 'null';
+    return MockValueGenerator.forReturnType(returnType);
   }
+
+  /// Derives the absolute path to the domain repository interface file for
+  /// the given [repo] dependency, based on the notifier's import path and
+  /// the project root.
+  String _repositoryInterfacePath(RepositoryDep repo, NotifierInfo n) {
+    final featureName = _extractFeatureName(n.importPath);
+    final snakeCase = _toSnakeCase(repo.type);
+    return p.join(
+      projectRoot,
+      'lib',
+      'features',
+      featureName,
+      'domain',
+      'repositories',
+      '$snakeCase.dart',
+    );
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
 
   String _buildArgList(List<ParamInfo> params) => params.map((p) {
         if (p.isNamed) return '${p.name}: ${p.name}';
@@ -355,17 +383,9 @@ class TestGenerator {
     final normalizedFeature =
         featureName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase();
 
-    if (normalizedRepo.isEmpty || normalizedFeature.isEmpty) {
-      return false;
-    }
-
-    if (normalizedRepo == normalizedFeature) {
-      return true;
-    }
-
-    if (normalizedRepo.contains(normalizedFeature)) {
-      return true;
-    }
+    if (normalizedRepo.isEmpty || normalizedFeature.isEmpty) return false;
+    if (normalizedRepo == normalizedFeature) return true;
+    if (normalizedRepo.contains(normalizedFeature)) return true;
 
     final featureTokens = normalizedFeature
         .split(RegExp(r'[_\- ]+'))
@@ -375,11 +395,8 @@ class TestGenerator {
     return featureTokens.any((token) => normalizedRepo.contains(token));
   }
 
-  /// Checks if a type is a repository interface (not a service/datasource)
   bool _isRepositoryInterface(String type) {
     final lower = type.toLowerCase();
-    // Only consider types ending with "Repository" or "Repository" variants
-    // Exclude Service, DataSource, Client, API, Auth (local auth service)
     return lower.endsWith('repository') &&
         !lower.contains('service') &&
         !lower.contains('datasource') &&

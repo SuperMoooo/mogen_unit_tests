@@ -4,7 +4,8 @@
 class MockValueGenerator {
   MockValueGenerator._();
 
-  /// Returns a literal expression suitable for [rawType].
+  /// Returns a literal expression suitable for use as a **method parameter**
+  /// in test arrange blocks (e.g. `final url = '';`).
   static String forType(String rawType) {
     final type = rawType.replaceAll('?', '').trim();
 
@@ -40,8 +41,65 @@ class MockValueGenerator {
       case 'Uri':
         return "Uri.parse('https://example.com')";
       default:
+        // Unknown / custom type used as a parameter — generate a Fake stub.
         return 'Fake$type()';
     }
+  }
+
+  /// Returns a literal expression suitable for use as a **repository stub
+  /// return value** inside `thenAnswer` / `thenReturn`.
+  ///
+  /// Rules:
+  ///   - `void` / `Future<void>` → `null`
+  ///   - Primitives and collections → same literals as [forType]
+  ///   - Nullable types → `null`
+  ///   - Custom / entity classes → `ClassName.empty()`
+  static String forReturnType(String rawType) {
+    final nullable = rawType.trim().endsWith('?');
+    final type = rawType.replaceAll('?', '').trim();
+
+    // Unwrap Future<T> to operate on the inner type.
+    final inner = type.startsWith('Future<') ? _generic(type) : type;
+    final innerNullable = inner.trim().endsWith('?');
+    final innerClean = inner.replaceAll('?', '').trim();
+
+    // void / Future<void>
+    if (innerClean == 'void' || innerClean.isEmpty) return 'null';
+
+    // Explicitly nullable → null is the simplest valid value.
+    if (nullable || innerNullable) return 'null';
+
+    // Collections
+    if (innerClean.startsWith('List<') || innerClean == 'List')
+      return 'const []';
+    if (innerClean.startsWith('Map<') || innerClean == 'Map') return 'const {}';
+    if (innerClean.startsWith('Set<') || innerClean == 'Set') return 'const {}';
+
+    // Primitives
+    switch (innerClean) {
+      case 'String':
+        return "''";
+      case 'int':
+        return '0';
+      case 'double':
+        return '0.0';
+      case 'num':
+        return '0';
+      case 'bool':
+        return 'false';
+      case 'dynamic':
+      case 'Object':
+        return 'null';
+      case 'DateTime':
+        return 'DateTime(2024)';
+      case 'Duration':
+        return 'Duration.zero';
+      case 'Uri':
+        return "Uri.parse('https://example.com')";
+    }
+
+    // Custom / entity class → use the `.empty()` named constructor.
+    return '$innerClean.empty()';
   }
 
   static String _generic(String type) {
@@ -53,7 +111,7 @@ class MockValueGenerator {
 
   /// Returns `true` when [type] is one of the primitive literal types.
   static bool isPrimitive(String type) {
-    const p = {
+    const primitives = {
       'String',
       'int',
       'double',
@@ -66,6 +124,6 @@ class MockValueGenerator {
       'Duration',
       'Uri',
     };
-    return p.contains(type.replaceAll('?', ''));
+    return primitives.contains(type.replaceAll('?', ''));
   }
 }

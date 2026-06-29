@@ -1,5 +1,5 @@
-## [1.0.22]
+## [1.0.23]
 
 ### Feat
 
-- Feature flag to generate only tests for a specific feature
+- FIXES
