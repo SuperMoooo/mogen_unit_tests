@@ -9,21 +9,25 @@ import '../utils/mock_value_generator.dart';
 
 /// Generates a complete Mocktail + Riverpod test file for one [NotifierInfo].
 ///
-/// Improvements:
-///   - Only stubs methods actually called in the notifier
-///   - Filters to only mock repository interfaces (not services)
-///   - Generates generic repository return stubs for any feature
-///   - Generates specific state field assertions (before/after)
-///   - Imports only relevant domain repository interfaces
-///   - Skips helper methods starting with 'p' (internal notifier extensions)
-///   - Emits `any(named: 'x')` for named arguments in stubs
-///   - Resolves repository method return types and emits correct stub values:
-///       void / Future<void>  → null
-///       primitives           → literal (e.g. '', 0, false)
-///       nullable types       → null
-///       custom entity types  → ClassName.empty()
+/// Import strategy
+/// ───────────────
+/// Rather than importing a hard-coded entity file, the generator does a
+/// first pass over every stubbed repository call, resolves each method's
+/// declared return type from the repository interface source, extracts the
+/// leaf custom type (unwrapping Future<T> and List<T>), converts it to a
+/// snake_case file path and emits a targeted import.  Primitives and
+/// nullable types that stub as `null` produce no import.
+///
+/// Stub return value strategy
+/// ──────────────────────────
+///   void / Future<void>       → null
+///   nullable T?               → null
+///   primitive                 → literal  ('', 0, false, …)
+///   List<CustomType>          → [CustomType.empty()]
+///   List<primitive>           → []
+///   CustomType                → CustomType.empty()
 class TestGenerator {
-  /// Creates a generator.  [projectRoot] is needed to locate repository
+  /// Creates a generator. [projectRoot] is needed to locate repository
   /// interface files for return-type resolution.
   TestGenerator({required this.projectRoot});
 
@@ -37,21 +41,86 @@ class TestGenerator {
   String generate(NotifierInfo notifier) {
     final buf = StringBuffer();
 
-    _imports(buf, notifier);
+    // ── First pass: resolve all stub return types so we know which custom
+    //    entity types need to be imported before we write anything.
+    final customTypeImports = _collectCustomTypeImports(notifier);
+
+    _imports(buf, notifier, customTypeImports);
     _mocks(buf, notifier);
     _mainBlock(buf, notifier);
 
     try {
       return _fmt.format(buf.toString());
     } catch (_) {
-      // Return unformatted if there is a syntax error in the generated code.
       return buf.toString();
     }
   }
 
-  // ── Imports ─────────────────────────────────────────────────────────────
+  // ── First pass: collect entity imports ──────────────────────────────────
 
-  void _imports(StringBuffer b, NotifierInfo n) {
+  /// Walks every public method × every repo dependency, resolves each
+  /// repository method's return type, extracts the custom leaf type, and
+  /// returns the set of `package:` import strings that are needed.
+  Set<String> _collectCustomTypeImports(NotifierInfo n) {
+    final featureName = _extractFeatureName(n.importPath);
+    final filteredRepos = _featureRepositories(n)
+        .where((r) => _isRepositoryInterface(r.type))
+        .toList();
+
+    final imports = <String>{};
+
+    final publicMethods = n.methods.where((m) => !m.name.startsWith('p'));
+
+    for (final method in publicMethods) {
+      for (final repo in filteredRepos) {
+        final calls = MethodCallDetector.detectRepositoryMethodCalls(
+          n.sourceFilePath,
+          repo.type,
+          methodName: method.name,
+        );
+
+        final repoInterfacePath = _repositoryInterfacePath(repo, n);
+
+        for (final call in calls) {
+          final returnType = MethodCallDetector.resolveReturnType(
+            repoInterfacePath,
+            call.methodName,
+          );
+          if (returnType == null) continue;
+
+          final customType = MockValueGenerator.extractCustomType(returnType);
+          if (customType == null) continue;
+
+          // Convert the class name to the expected snake_case file path.
+          // e.g. UserEntity → user_entity, ContactModel → contact_model
+          final snakeFile = _toSnakeCase(customType);
+          // Heuristic: if the type name ends with Entity, Model, or Data,
+          // place it in domain/entities; otherwise try the same folder.
+          final subFolder = _entitySubfolder(customType);
+          imports.add(
+            "import 'package:${n.packageName}/features/$featureName/$subFolder/$snakeFile.dart';",
+          );
+        }
+      }
+    }
+
+    return imports;
+  }
+
+  /// Returns the `lib/features/<feature>/` sub-path where a custom type
+  /// class file is likely to live based on its name suffix.
+  String _entitySubfolder(String typeName) {
+    final lower = typeName.toLowerCase();
+    if (lower.endsWith('entity')) return 'domain/entities';
+    if (lower.endsWith('model')) return 'data/models';
+    if (lower.endsWith('data')) return 'data/models';
+    // Default — most custom return types in Clean Architecture are entities.
+    return 'domain/entities';
+  }
+
+  // ── Imports ──────────────────────────────────────────────────────────────
+
+  void _imports(StringBuffer b, NotifierInfo n, Set<String> customTypeImports) {
     b.writeln('// GENERATED BY mogen_unit_tests — YOU CAN REMOVE THIS COMMENT');
     b.writeln();
     b.writeln("import 'package:flutter_riverpod/flutter_riverpod.dart';");
@@ -59,30 +128,30 @@ class TestGenerator {
     b.writeln("import 'package:mocktail/mocktail.dart';");
     b.writeln();
 
-    // Import the notifier itself.
+    // Notifier
     b.writeln("import '${n.importPath}';");
 
-    // Import the state if available.
+    // State (if available)
     if (n.stateInfo != null) {
       b.writeln("import '${n.stateInfo!.importPath}';");
     }
 
-    // Import only repository interfaces from the current feature.
+    // Repository interface + impl imports
     final featureName = _extractFeatureName(n.importPath);
     final filteredRepos =
         _featureRepositories(n).where((r) => _isRepositoryInterface(r.type));
-
-    final snakeCase = _toSnakeCase(featureName);
-    b.writeln(
-        "import 'package:${n.packageName}/features/$featureName/domain/entities/${snakeCase}_entity.dart';");
 
     for (final repo in filteredRepos) {
       final snakeCase = _toSnakeCase(repo.type);
       b.writeln(
           "import 'package:${n.packageName}/features/$featureName/domain/repositories/$snakeCase.dart';");
-
       b.writeln(
           "import 'package:${n.packageName}/features/$featureName/data/repositories/${snakeCase}_impl.dart';");
+    }
+
+    // Entity / model imports derived from actual stub return types
+    for (final import in customTypeImports) {
+      b.writeln(import);
     }
 
     b.writeln();
@@ -131,7 +200,6 @@ class TestGenerator {
     _setUp(b, n, filteredRepos);
     _tearDown(b);
 
-    // Filter out internal methods that start with 'p'.
     final publicMethods =
         n.methods.where((m) => !m.name.startsWith('p')).toList();
 
@@ -319,24 +387,14 @@ class TestGenerator {
     }
   }
 
-  // ── Stub return value resolution ─────────────────────────────────────────
+  // ── Stub return value ─────────────────────────────────────────────────────
 
-  /// Returns a Dart literal suitable for the `thenAnswer` stub return value,
-  /// derived from the repository method's declared [returnType].
-  ///
-  ///   - null / unknown                → `null`
-  ///   - `void` / `Future<void>`       → `null`
-  ///   - nullable types (`T?`)         → `null`
-  ///   - primitive types               → literal (`''`, `0`, `false`, …)
-  ///   - custom / entity class         → `ClassName.empty()`
   String _stubReturnValue(String? returnType) {
     if (returnType == null) return 'null';
     return MockValueGenerator.forReturnType(returnType);
   }
 
-  /// Derives the absolute path to the domain repository interface file for
-  /// the given [repo] dependency, based on the notifier's import path and
-  /// the project root.
+  /// Derives the absolute path to the domain repository interface file.
   String _repositoryInterfacePath(RepositoryDep repo, NotifierInfo n) {
     final featureName = _extractFeatureName(n.importPath);
     final snakeCase = _toSnakeCase(repo.type);
@@ -406,8 +464,7 @@ class TestGenerator {
         !lower.contains('service') &&
         !lower.contains('datasource') &&
         !lower.contains('client') &&
-        !lower.contains('api') &&
-        !lower.contains('localauth');
+        !lower.contains('api');
   }
 
   String _toSnakeCase(String name) => name

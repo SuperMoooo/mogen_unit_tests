@@ -50,10 +50,12 @@ class MockValueGenerator {
   /// return value** inside `thenAnswer` / `thenReturn`.
   ///
   /// Rules:
-  ///   - `void` / `Future<void>` → `null`
-  ///   - Primitives and collections → same literals as [forType]
-  ///   - Nullable types → `null`
-  ///   - Custom / entity classes → `ClassName.empty()`
+  ///   - `void` / `Future<void>`           → `null`
+  ///   - nullable types (`T?`)              → `null`
+  ///   - primitives                         → literal (`''`, `0`, `false`, …)
+  ///   - `List<CustomType>`                 → `[CustomType.empty()]`
+  ///   - `List<primitive>`                  → `[]`
+  ///   - custom / entity class              → `ClassName.empty()`
   static String forReturnType(String rawType) {
     final nullable = rawType.trim().endsWith('?');
     final type = rawType.replaceAll('?', '').trim();
@@ -69,9 +71,13 @@ class MockValueGenerator {
     // Explicitly nullable → null is the simplest valid value.
     if (nullable || innerNullable) return 'null';
 
-    // Collections
-    if (innerClean.startsWith('List<') || innerClean == 'List')
-      return 'const []';
+    // List<T> — check whether T is a custom type or a primitive.
+    if (innerClean.startsWith('List<')) {
+      final itemType = _generic(innerClean).replaceAll('?', '').trim();
+      if (isPrimitive(itemType) || itemType == 'dynamic') return '[]';
+      return '[${itemType}.empty()]';
+    }
+
     if (innerClean.startsWith('Map<') || innerClean == 'Map') return 'const {}';
     if (innerClean.startsWith('Set<') || innerClean == 'Set') return 'const {}';
 
@@ -100,6 +106,43 @@ class MockValueGenerator {
 
     // Custom / entity class → use the `.empty()` named constructor.
     return '$innerClean.empty()';
+  }
+
+  /// Extracts the leaf custom type from a return type string, unwrapping
+  /// `Future<T>` and `List<T>`. Returns `null` for primitives, void, and
+  /// nullable types (which stub as `null` and need no import).
+  ///
+  /// Examples:
+  ///   `Future<UserEntity>`       → `UserEntity`
+  ///   `Future<List<UserEntity>>` → `UserEntity`
+  ///   `Future<void>`             → `null`
+  ///   `Future<String?>`          → `null`
+  ///   `Future<String>`           → `null`
+  static String? extractCustomType(String rawType) {
+    final nullable = rawType.trim().endsWith('?');
+    if (nullable) return null;
+
+    final type = rawType.replaceAll('?', '').trim();
+
+    // Unwrap Future<T>
+    final inner = type.startsWith('Future<') ? _generic(type) : type;
+    final innerNullable = inner.trim().endsWith('?');
+    if (innerNullable) return null;
+
+    final innerClean = inner.replaceAll('?', '').trim();
+
+    if (innerClean == 'void' || innerClean.isEmpty) return null;
+
+    // Unwrap List<T>
+    final candidate =
+        innerClean.startsWith('List<') ? _generic(innerClean) : innerClean;
+    final candidateClean = candidate.replaceAll('?', '').trim();
+
+    if (isPrimitive(candidateClean) || candidateClean == 'dynamic') return null;
+    if (candidateClean.startsWith('Map<') || candidateClean.startsWith('Set<'))
+      return null;
+
+    return candidateClean;
   }
 
   static String _generic(String type) {

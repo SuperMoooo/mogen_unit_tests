@@ -1,5 +1,5 @@
-## [1.0.24]
+## [1.0.25]
 
 ### Feat
 
-- FIXES
+- IMPORT RETURN TYPES
