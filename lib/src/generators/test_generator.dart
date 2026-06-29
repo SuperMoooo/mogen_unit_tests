@@ -72,10 +72,15 @@ class TestGenerator {
     final filteredRepos =
         _featureRepositories(n).where((r) => _isRepositoryInterface(r.type));
 
+    final snakeCase = _toSnakeCase(featureName);
+    b.writeln(
+        "import 'package:${n.packageName}/features/$featureName/domain/entities/${snakeCase}_entity.dart';");
+
     for (final repo in filteredRepos) {
       final snakeCase = _toSnakeCase(repo.type);
       b.writeln(
           "import 'package:${n.packageName}/features/$featureName/domain/repositories/$snakeCase.dart';");
+
       b.writeln(
           "import 'package:${n.packageName}/features/$featureName/data/repositories/${snakeCase}_impl.dart';");
     }

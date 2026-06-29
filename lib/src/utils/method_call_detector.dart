@@ -238,7 +238,7 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
   List<String> _buildArgumentMatchers(NodeList<Expression> arguments) {
     return arguments.map((arg) {
       if (arg is NamedExpression) {
-        return "any(named: '${arg.name.label.name}')";
+        return "${arg.name.label.name}: any(named: '${arg.name.label.name}')";
       }
       return 'any()';
     }).toList();
