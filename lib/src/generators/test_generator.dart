@@ -258,6 +258,7 @@ class TestGenerator {
     b.writeln("    group('${method.name}', () {");
 
     _methodSuccessTest(b, method, n, filteredRepos);
+    _methodErrorTest(b, method, n, filteredRepos);
 
     b.writeln('    });');
     b.writeln();
@@ -306,7 +307,54 @@ class TestGenerator {
         n.stateInfo != null) {
       b.writeln(
           '        final finalState = container.read($notifierProvider);');
-      _generateStateFieldAssertions(b, method, n);
+      _generateStateFieldAssertions(b, n, expectSuccess: true);
+    } else {
+      b.writeln('        // expect(container.read($notifierProvider), ...);');
+    }
+
+    b.writeln('      });');
+    b.writeln();
+  }
+
+  void _methodErrorTest(StringBuffer b, MethodInfo method, NotifierInfo n,
+      List<RepositoryDep> filteredRepos) {
+    final notifierProvider = '${_lcFirst(n.className)}Provider';
+
+    b.writeln(
+        "      test('${method.name} shows an error when the repository fails', () async {");
+
+    _stubOnlyCalledMethods(b, method, n, filteredRepos, shouldThrow: true);
+
+    if (method.params.isNotEmpty) {
+      b.writeln();
+      b.writeln('        // Arrange: inputs');
+      for (final param in method.params) {
+        final val = MockValueGenerator.forType(param.type);
+        b.writeln('        final ${param.name} = $val;');
+      }
+    }
+
+    b.writeln();
+    b.writeln('        // Ensure notifier is initialised');
+    b.writeln('        await container.read($notifierProvider.future);');
+
+    b.writeln();
+    b.writeln('        // Act');
+
+    final args = _buildArgList(method.params);
+    final call =
+        '        await container.read($notifierProvider.notifier).${method.name}($args);';
+    b.writeln(call);
+
+    b.writeln();
+    b.writeln('        // Assert');
+
+    if (n.stateType != null &&
+        n.stateType != 'dynamic' &&
+        n.stateInfo != null) {
+      b.writeln(
+          '        final finalState = container.read($notifierProvider);');
+      _generateStateFieldAssertions(b, n, expectSuccess: false);
     } else {
       b.writeln('        // expect(container.read($notifierProvider), ...);');
     }
@@ -318,7 +366,10 @@ class TestGenerator {
   // ── Generate state field assertions ──────────────────────────────────────
 
   void _generateStateFieldAssertions(
-      StringBuffer b, MethodInfo method, NotifierInfo n) {
+    StringBuffer b,
+    NotifierInfo n, {
+    required bool expectSuccess,
+  }) {
     if (n.stateInfo == null) return;
 
     final commonLoadingFields = ['isLoadingAction', 'isLoading', 'loading'];
@@ -336,14 +387,16 @@ class TestGenerator {
 
     for (final field in commonErrorFields) {
       if (stateFieldNames.contains(field)) {
-        b.writeln('        expect(finalState.requireValue.$field, isNull);');
+        b.writeln(
+            '        expect(finalState.requireValue.$field, ${expectSuccess ? 'isNull' : 'isNotNull'});');
         break;
       }
     }
 
     for (final field in commonSuccessFields) {
       if (stateFieldNames.contains(field)) {
-        b.writeln('        expect(finalState.requireValue.$field, isNull);');
+        b.writeln(
+            '        expect(finalState.requireValue.$field, ${expectSuccess ? 'isNotNull' : 'isNull'});');
         break;
       }
     }
@@ -355,8 +408,9 @@ class TestGenerator {
     StringBuffer b,
     MethodInfo method,
     NotifierInfo n,
-    List<RepositoryDep> filteredRepos,
-  ) {
+    List<RepositoryDep> filteredRepos, {
+    bool shouldThrow = false,
+  }) {
     if (filteredRepos.isEmpty) return;
 
     b.writeln('        // Arrange: stub repositories');
@@ -376,12 +430,17 @@ class TestGenerator {
           b.writeln(
               '        when(() => mock${repo.type}.${call.invocationSource})');
 
-          final returnType = MethodCallDetector.resolveReturnType(
-            repoInterfacePath,
-            call.methodName,
-          );
-          final returnVal = _stubReturnValue(returnType);
-          b.writeln('            .thenAnswer((_) async => $returnVal);');
+          if (shouldThrow) {
+            b.writeln(
+                "            .thenThrow(Exception('Simulated ${method.name} failure'));");
+          } else {
+            final returnType = MethodCallDetector.resolveReturnType(
+              repoInterfacePath,
+              call.methodName,
+            );
+            final returnVal = _stubReturnValue(returnType);
+            b.writeln('            .thenAnswer((_) async => $returnVal);');
+          }
         }
       }
     }

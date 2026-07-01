@@ -237,12 +237,19 @@ void main() {
 
       final output = generator.generate(notifier);
 
-      // Should generate assertions for state fields
-      // FIX: success is now asserted for ANY async method (not just hardcoded names)
+      // Success path should clear the error and surface the success message.
       expect(
-          output, contains('expect(finalState.requireValue.isLoadingAction'));
-      expect(output, contains('expect(finalState.requireValue.error'));
-      expect(output, contains('expect(finalState.requireValue.success'));
+          output, contains('expect(finalState.requireValue.error, isNull);'));
+      expect(output,
+          contains('expect(finalState.requireValue.success, isNotNull);'));
+
+      // Error path should surface the error and clear any success message.
+      expect(output,
+          contains("test('submit shows an error when the repository fails'"));
+      expect(output,
+          contains('expect(finalState.requireValue.error, isNotNull);'));
+      expect(
+          output, contains('expect(finalState.requireValue.success, isNull);'));
     });
 
     test('generates proper async/await syntax for async methods', () {
@@ -577,7 +584,8 @@ class AuthNotifier {
       }
     });
 
-    test('does not include error handling test scaffolding', () {
+    test('includes error handling test scaffolding for repository failures',
+        () {
       const notifier = NotifierInfo(
         className: 'RiskyNotifier',
         sourceFilePath: '/tmp/risky_notifier.dart',
@@ -600,10 +608,59 @@ class AuthNotifier {
 
       final output = generator.generate(notifier);
 
-      // Should NOT include error test patterns
-      expect(output, isNot(contains("test('handles error from repository'")));
-      expect(output, isNot(contains("test('throws exception when")));
-      expect(output, isNot(contains('thenThrow')));
+      // The generator should include an explicit failure-path test for each method.
+      expect(output, contains("shows an error when the repository fails"));
+    });
+
+    test('throws in the error-path scaffold when a repository call exists', () {
+      final tempDir = Directory.systemTemp.createTempSync('mogen_error_test_');
+      try {
+        final file =
+            File('${tempDir.path}${Platform.pathSeparator}auth_notifier.dart');
+        file.writeAsStringSync('''
+class AuthNotifier {
+  final AuthRepository authRepository;
+
+  AuthNotifier(this.authRepository);
+
+  Future<void> login() async {
+    await authRepository.login();
+  }
+}
+''');
+
+        final notifier = NotifierInfo(
+          className: 'AuthNotifier',
+          sourceFilePath: file.path,
+          importPath:
+              'package:app/features/auth/presentation/notifiers/auth_notifier.dart',
+          packageName: 'app',
+          stateType: 'AuthState',
+          isAsync: true,
+          repositories: const [
+            RepositoryDep(type: 'AuthRepository', name: 'authRepository'),
+          ],
+          buildMethod: null,
+          methods: const [
+            MethodInfo(
+              name: 'login',
+              returnType: 'Future<void>',
+              isAsync: true,
+              params: [],
+            ),
+          ],
+        );
+
+        final output = generator.generate(notifier);
+
+        expect(output,
+            contains("test('login shows an error when the repository fails'"));
+        expect(output, contains('when(() => mockAuthRepository.login())'));
+        expect(output,
+            contains("thenThrow(Exception('Simulated login failure'))"));
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
     });
 
     test('generates only success test case per method', () {
