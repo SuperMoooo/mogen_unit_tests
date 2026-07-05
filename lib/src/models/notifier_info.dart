@@ -14,6 +14,7 @@ class NotifierInfo {
     this.buildMethod,
     required this.methods,
     this.stateInfo,
+    this.sourceImports = const [],
   });
 
   /// e.g. `CartNotifier`.
@@ -45,6 +46,14 @@ class NotifierInfo {
 
   /// Resolved state info from the matching `states/` file, if available.
   final StateInfo? stateInfo;
+
+  /// The `import` directive URIs found in the notifier's own source file.
+  ///
+  /// Used to resolve accurate import paths for dependencies (repositories,
+  /// services, other notifiers, ...) that don't follow the standard
+  /// `domain/repositories` folder convention, by reusing an import the
+  /// source file already declares.
+  final List<String> sourceImports;
 }
 
 /// A repository or service dependency detected inside the notifier.

@@ -28,10 +28,17 @@ class NotifierParser {
     final content = File(filePath).readAsStringSync();
     final result = parseString(content: content, path: filePath);
 
+    final sourceImports = result.unit.directives
+        .whereType<ImportDirective>()
+        .map((d) => d.uri.stringValue)
+        .whereType<String>()
+        .toList();
+
     final visitor = _NotifierVisitor(
       filePath: filePath,
       importPath: _toPackagePath(filePath),
       packageName: packageName, // ← ADDED
+      sourceImports: sourceImports,
     );
     result.unit.visitChildren(visitor);
     return visitor.notifiers;
@@ -54,11 +61,13 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
     required this.filePath,
     required this.importPath,
     required this.packageName, // ← ADDED PARAMETER
+    required this.sourceImports,
   });
 
   final String filePath;
   final String importPath;
   final String packageName; // ← ADDED FIELD
+  final List<String> sourceImports;
   final List<NotifierInfo> notifiers = [];
 
   @override
@@ -120,6 +129,7 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
       repositories: repos,
       buildMethod: buildMethod,
       methods: methods,
+      sourceImports: sourceImports,
     ));
   }
 

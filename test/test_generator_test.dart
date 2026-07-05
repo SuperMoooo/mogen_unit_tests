@@ -14,8 +14,9 @@ void main() {
       generator = TestGenerator(projectRoot: ".");
     });
 
-    test('generates feature-scoped imports and omits non-feature repositories',
-        () {
+    test(
+        'generates imports for every repository dependency, including ones '
+        'from other features, and omits the build method', () {
       const notifier = NotifierInfo(
         className: 'AuthNotifier',
         sourceFilePath: '/tmp/auth_notifier.dart',
@@ -58,18 +59,22 @@ void main() {
 
       final output = generator.generate(notifier);
 
-      // Should import only the auth feature's auth_repository
+      // Should import the auth feature's own repository.
       expect(
         output,
         contains(
             "import 'package:app/features/auth/domain/repositories/auth_repository.dart';"),
       );
 
-      // Should NOT import CartRepository (different feature)
-      expect(output, isNot(contains('CartRepository')));
+      // A dependency isn't skipped just because it doesn't belong to this
+      // notifier's own feature — every dependency the notifier actually
+      // touches should be mocked, otherwise the real implementation runs
+      // inside what's supposed to be an isolated unit test.
+      expect(output, contains('class MockCartRepository extends Mock'));
       expect(
         output,
-        isNot(contains('cart_repository')),
+        contains(
+            "import 'package:app/features/auth/domain/repositories/cart_repository.dart';"),
       );
 
       // Should NOT generate test for build method
@@ -433,7 +438,7 @@ void main() {
       expect(output, contains('orderItemRepositoryProvider'));
     });
 
-    test('filters out repositories from different features', () {
+    test('mocks repository dependencies from other features too', () {
       const notifier = NotifierInfo(
         className: 'OrderNotifier',
         sourceFilePath: '/tmp/order_notifier.dart',
@@ -455,9 +460,11 @@ void main() {
       // Should include OrderRepository (same feature)
       expect(output, contains('class MockOrderRepository'));
 
-      // Should NOT include PaymentRepository (different feature)
-      expect(output, isNot(contains('class MockPaymentRepository')));
-      expect(output, isNot(contains('paymentRepositoryProvider')));
+      // A repository from another feature is still a real dependency this
+      // notifier relies on, and must be overridden too so the test doesn't
+      // exercise the real PaymentRepository implementation.
+      expect(output, contains('class MockPaymentRepository'));
+      expect(output, contains('paymentRepositoryProvider'));
     });
 
     test('scopes repository stubs to the current method group only', () {
@@ -702,6 +709,268 @@ class AuthNotifier {
 
       expect(count1, equals(1));
       expect(count2, equals(1));
+    });
+
+    test(
+        'mocks a cross-notifier dependency and resolves its import via the '
+        'project-wide notifier index', () {
+      final indexedGenerator = TestGenerator(
+        projectRoot: '.',
+        notifierIndex: const {
+          'CartNotifier':
+              'package:app/features/cart/presentation/notifiers/cart_notifier.dart',
+        },
+      );
+
+      const notifier = NotifierInfo(
+        className: 'CheckoutNotifier',
+        sourceFilePath: '/tmp/checkout_notifier.dart',
+        importPath:
+            'package:app/features/checkout/presentation/notifiers/checkout_notifier.dart',
+        packageName: 'app',
+        stateType: 'CheckoutState',
+        isAsync: true,
+        repositories: const [
+          RepositoryDep(
+            type: 'CartNotifier',
+            name: 'cartNotifier',
+            providerExpression: 'cartNotifierProvider.notifier',
+          ),
+        ],
+        buildMethod: null,
+        methods: const [
+          MethodInfo(
+            name: 'checkout',
+            returnType: 'Future<void>',
+            isAsync: true,
+            params: [],
+          ),
+        ],
+      );
+
+      final output = indexedGenerator.generate(notifier);
+
+      // The other notifier is a real dependency and must be mocked, not left
+      // to run for real inside this notifier's test.
+      expect(output, contains('class MockCartNotifier extends Mock'));
+      expect(
+        output,
+        contains(
+            "import 'package:app/features/cart/presentation/notifiers/cart_notifier.dart';"),
+      );
+
+      // Notifier-shaped dependencies override the provider's *implementation*
+      // (overrideWith), not its exposed state value (overrideWithValue).
+      expect(
+        output,
+        contains(
+            'cartNotifierProvider.notifier.overrideWith(() => mockCartNotifier)'),
+      );
+    });
+
+    test(
+        'mocks a raw SDK dependency reached via ref.read even though its '
+        'type name matches no repository-style suffix', () {
+      const notifier = NotifierInfo(
+        className: 'AuthNotifier',
+        sourceFilePath: '/tmp/auth_notifier.dart',
+        importPath:
+            'package:app/features/auth/presentation/notifiers/auth_notifier.dart',
+        packageName: 'app',
+        stateType: 'AuthState',
+        isAsync: true,
+        repositories: const [
+          RepositoryDep(
+            type: 'FlutterSecureStorage',
+            name: 'secureStorage',
+            providerExpression: 'secureStorageProvider',
+          ),
+        ],
+        buildMethod: null,
+        methods: const [
+          MethodInfo(
+            name: 'login',
+            returnType: 'Future<void>',
+            isAsync: true,
+            params: [],
+          ),
+        ],
+      );
+
+      final output = generator.generate(notifier);
+
+      // Reached via ref.read(...) — that's the DI seam, so it must be mocked
+      // regardless of its type name not looking like a repository/service.
+      expect(
+          output, contains('class MockFlutterSecureStorage extends Mock'));
+      expect(
+          output, contains('secureStorageProvider.overrideWithValue'));
+
+      // The import location can't be resolved from a bare NotifierInfo (no
+      // source imports, no index entry), so a visible TODO should be emitted
+      // instead of a silently wrong guessed path.
+      expect(output, contains('TODO(mogen_unit_tests)'));
+    });
+
+    test('resolves a dependency import from the notifier\'s own source file',
+        () {
+      const notifier = NotifierInfo(
+        className: 'AuthNotifier',
+        sourceFilePath: '/tmp/auth_notifier.dart',
+        importPath:
+            'package:app/features/auth/presentation/notifiers/auth_notifier.dart',
+        packageName: 'app',
+        stateType: 'AuthState',
+        isAsync: true,
+        repositories: const [
+          RepositoryDep(
+            type: 'ApiClient',
+            name: 'apiClient',
+            providerExpression: 'apiClientProvider',
+          ),
+        ],
+        buildMethod: null,
+        methods: const [],
+        sourceImports: [
+          'package:app/core/network/api_client.dart',
+        ],
+      );
+
+      final output = generator.generate(notifier);
+
+      expect(
+        output,
+        contains("import 'package:app/core/network/api_client.dart';"),
+      );
+      expect(output, isNot(contains('TODO(mogen_unit_tests)')));
+    });
+
+    test('does not emit .future for a plain (synchronous) Notifier', () {
+      const notifier = NotifierInfo(
+        className: 'CounterNotifier',
+        sourceFilePath: '/tmp/counter_notifier.dart',
+        importPath:
+            'package:app/features/counter/presentation/notifiers/counter_notifier.dart',
+        packageName: 'app',
+        stateType: 'CounterState',
+        isAsync: false,
+        repositories: const [],
+        buildMethod: null,
+        methods: const [
+          MethodInfo(
+            name: 'increment',
+            returnType: 'void',
+            isAsync: false,
+            params: [],
+          ),
+        ],
+      );
+
+      final output = generator.generate(notifier);
+
+      // A plain NotifierProvider has no `.future` getter.
+      expect(output, isNot(contains('.future')));
+      expect(output, contains('container.read(counterNotifierProvider);'));
+    });
+
+    test('does not force await on the error-path call for a sync method', () {
+      const notifier = NotifierInfo(
+        className: 'CounterNotifier',
+        sourceFilePath: '/tmp/counter_notifier.dart',
+        importPath:
+            'package:app/features/counter/presentation/notifiers/counter_notifier.dart',
+        packageName: 'app',
+        stateType: 'CounterState',
+        isAsync: false,
+        repositories: const [],
+        buildMethod: null,
+        methods: const [
+          MethodInfo(
+            name: 'increment',
+            returnType: 'void',
+            isAsync: false,
+            params: [],
+          ),
+        ],
+      );
+
+      final output = generator.generate(notifier);
+
+      final errorTest = output.substring(
+        output.indexOf("shows an error when the repository fails"),
+      );
+      expect(
+        errorTest,
+        isNot(contains('await container.read(counterNotifierProvider.notifier).increment')),
+      );
+    });
+
+    test('uses .empty() instead of an undefined Fake class for custom-type '
+        'method parameters', () {
+      const notifier = NotifierInfo(
+        className: 'CartNotifier',
+        sourceFilePath: '/tmp/cart_notifier.dart',
+        importPath:
+            'package:app/features/cart/presentation/notifiers/cart_notifier.dart',
+        packageName: 'app',
+        stateType: 'CartState',
+        isAsync: true,
+        repositories: const [],
+        buildMethod: null,
+        methods: const [
+          MethodInfo(
+            name: 'addItem',
+            returnType: 'Future<void>',
+            isAsync: true,
+            params: [
+              ParamInfo(name: 'item', type: 'CartItem'),
+            ],
+          ),
+        ],
+      );
+
+      final output = generator.generate(notifier);
+
+      expect(output, contains('final item = CartItem.empty();'));
+      expect(output, isNot(contains('FakeCartItem')));
+      expect(output, isNot(contains('class Fake')));
+    });
+
+    test('treats a public method starting with lowercase p as a real method',
+        () {
+      const notifier = NotifierInfo(
+        className: 'PublishingNotifier',
+        sourceFilePath: '/tmp/publishing_notifier.dart',
+        importPath:
+            'package:app/features/publishing/presentation/notifiers/publishing_notifier.dart',
+        packageName: 'app',
+        stateType: 'PublishingState',
+        isAsync: true,
+        repositories: const [],
+        buildMethod: null,
+        methods: const [
+          MethodInfo(
+            name: 'publish',
+            returnType: 'Future<void>',
+            isAsync: true,
+            params: [],
+          ),
+          MethodInfo(
+            name: 'pOnSuccess',
+            returnType: 'void',
+            isAsync: false,
+            params: [],
+          ),
+        ],
+      );
+
+      final output = generator.generate(notifier);
+
+      // `publish` is a real method (lowercase p followed by a lowercase
+      // letter) and must not be treated as an internal `pXxx` helper.
+      expect(output, contains("group('publish'"));
+      // `pOnSuccess` still matches the internal-helper convention.
+      expect(output, isNot(contains("group('pOnSuccess'")));
     });
   });
 }

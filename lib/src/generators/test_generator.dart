@@ -18,6 +18,26 @@ import '../utils/mock_value_generator.dart';
 /// snake_case file path and emits a targeted import.  Primitives and
 /// nullable types that stub as `null` produce no import.
 ///
+/// Dependency mocking strategy
+/// ────────────────────────────
+/// Any dependency read via `ref.read()`/`ref.watch()` is a deliberate
+/// Riverpod DI seam, so it is always mocked and overridden regardless of
+/// its type name — this is what lets raw SDK dependencies (a directly
+/// injected `FlutterSecureStorage`, `FirebaseAuth`, a `Dio` client, or
+/// another feature's notifier) get mocked instead of running for real
+/// inside the generated test. Dependencies discovered only as a class
+/// field (no provider expression) still rely on a name heuristic
+/// (Repository/Service/Client/DataSource/Api/Notifier/Cubit/Bloc/ViewModel)
+/// to avoid flagging unrelated fields.
+///
+/// Import resolution for a mocked dependency is attempted in order:
+///   1. the project-wide notifier index (exact match for cross-notifier deps)
+///   2. an import the notifier's own source file already declares
+///   3. the conventional Clean-Architecture repository folder layout
+///      (only for `...Repository`-named types)
+///   4. otherwise a `// TODO` comment is emitted instead of a guessed,
+///      possibly-wrong import path.
+///
 /// Stub return value strategy
 /// ──────────────────────────
 ///   void / Future<void>       → null
@@ -28,11 +48,17 @@ import '../utils/mock_value_generator.dart';
 ///   CustomType                → CustomType.empty()
 class TestGenerator {
   /// Creates a generator. [projectRoot] is needed to locate repository
-  /// interface files for return-type resolution.
-  TestGenerator({required this.projectRoot});
+  /// interface files for return-type resolution. [notifierIndex] maps every
+  /// notifier class name discovered in the project to its `package:` import
+  /// path, and is used to resolve cross-notifier dependency imports.
+  TestGenerator({required this.projectRoot, this.notifierIndex = const {}});
 
   /// Absolute path to the Flutter project root.
   final String projectRoot;
+
+  /// Notifier class name → `package:` import path, for every notifier found
+  /// in the project.
+  final Map<String, String> notifierIndex;
 
   final _fmt =
       DartFormatter(languageVersion: DartFormatter.latestLanguageVersion);
@@ -58,21 +84,23 @@ class TestGenerator {
 
   // ── First pass: collect entity imports ──────────────────────────────────
 
-  /// Walks every public method × every repo dependency, resolves each
+  /// Walks every public method × every repository dependency, resolves each
   /// repository method's return type, extracts the custom leaf type, and
   /// returns the set of `package:` import strings that are needed.
+  ///
+  /// Restricted to `...Repository`-named dependencies, since only those
+  /// follow the folder convention needed to locate and parse the interface
+  /// source for return-type resolution.
   Set<String> _collectCustomTypeImports(NotifierInfo n) {
-    final featureName = _extractFeatureName(n.importPath);
-    final filteredRepos = _featureRepositories(n)
-        .where((r) => _isRepositoryInterface(r.type))
-        .toList();
+    final repositoryDeps =
+        _mockableDependencies(n).where((r) => _isRepositorySuffix(r.type));
 
     final imports = <String>{};
-
-    final publicMethods = n.methods.where((m) => !m.name.startsWith('p'));
+    final featureName = _extractFeatureName(n.importPath);
+    final publicMethods = n.methods.where((m) => !_isInternalHelper(m.name));
 
     for (final method in publicMethods) {
-      for (final repo in filteredRepos) {
+      for (final repo in repositoryDeps) {
         final calls = MethodCallDetector.detectRepositoryMethodCalls(
           n.sourceFilePath,
           repo.type,
@@ -136,17 +164,11 @@ class TestGenerator {
       b.writeln("import '${n.stateInfo!.importPath}';");
     }
 
-    // Repository interface + impl imports
-    final featureName = _extractFeatureName(n.importPath);
-    final filteredRepos =
-        _featureRepositories(n).where((r) => _isRepositoryInterface(r.type));
-
-    for (final repo in filteredRepos) {
-      final snakeCase = _toSnakeCase(repo.type);
-      b.writeln(
-          "import 'package:${n.packageName}/features/$featureName/domain/repositories/$snakeCase.dart';");
-      b.writeln(
-          "import 'package:${n.packageName}/features/$featureName/data/repositories/${snakeCase}_impl.dart';");
+    // Dependency imports (repositories, services, clients, other notifiers, …)
+    for (final repo in _mockableDependencies(n)) {
+      for (final line in _resolveDependencyImports(repo, n)) {
+        b.writeln(line);
+      }
     }
 
     // Entity / model imports derived from actual stub return types
@@ -157,18 +179,75 @@ class TestGenerator {
     b.writeln();
   }
 
+  /// Resolves the import(s) needed for [repo]'s mock class to compile, trying
+  /// (in order) the project-wide notifier index, the notifier's own source
+  /// imports, and the Clean-Architecture repository convention. Emits a
+  /// `// TODO` comment instead of a guess when nothing resolves.
+  List<String> _resolveDependencyImports(RepositoryDep repo, NotifierInfo n) {
+    final indexed = notifierIndex[repo.type];
+    if (indexed != null) return ["import '$indexed';"];
+
+    final fromSource = _findSourceImport(repo.type, n);
+    if (fromSource != null) return ["import '$fromSource';"];
+
+    if (_isRepositorySuffix(repo.type)) {
+      final featureName = _extractFeatureName(n.importPath);
+      final snakeCase = _toSnakeCase(repo.type);
+      return [
+        "import 'package:${n.packageName}/features/$featureName/domain/repositories/$snakeCase.dart';",
+        "import 'package:${n.packageName}/features/$featureName/data/repositories/${snakeCase}_impl.dart';",
+      ];
+    }
+
+    return [
+      '// TODO(mogen_unit_tests): could not resolve an import for '
+          "'${repo.type}' — add the correct import manually so "
+          'Mock${repo.type} compiles.',
+    ];
+  }
+
+  /// Looks for an import already declared in the notifier's own source file
+  /// whose target file plausibly defines [type], and returns it resolved to
+  /// a `package:` import valid from any location.
+  String? _findSourceImport(String type, NotifierInfo n) {
+    final snake = _toSnakeCase(type);
+    for (final uri in n.sourceImports) {
+      final base = p.basenameWithoutExtension(uri);
+      if (base == snake || base == '${snake}_impl') {
+        return _toPortableImport(uri, n);
+      }
+    }
+    return null;
+  }
+
+  /// Converts a possibly-relative import URI (valid from the notifier's own
+  /// source file) into a `package:` import valid from anywhere, since the
+  /// generated test lives in a different directory than the notifier.
+  String _toPortableImport(String uri, NotifierInfo n) {
+    if (uri.startsWith('package:') || uri.startsWith('dart:')) return uri;
+
+    final sourceDir = p.dirname(n.sourceFilePath);
+    final absoluteTarget = p.normalize(p.join(sourceDir, uri));
+    final libPath = p.join(projectRoot, 'lib');
+
+    if (p.isWithin(libPath, absoluteTarget)) {
+      final rel = p.relative(absoluteTarget, from: libPath).replaceAll(r'\', '/');
+      return 'package:${n.packageName}/$rel';
+    }
+
+    return absoluteTarget.replaceAll(r'\', '/');
+  }
+
   // ── Mock classes ─────────────────────────────────────────────────────────
 
   void _mocks(StringBuffer b, NotifierInfo n) {
-    final filteredRepos = _featureRepositories(n)
-        .where((r) => _isRepositoryInterface(r.type))
-        .toList();
+    final dependencies = _mockableDependencies(n);
 
-    if (filteredRepos.isEmpty) return;
+    if (dependencies.isEmpty) return;
 
     b.writeln(
         '// ── Mocks ────────────────────────────────────────────────────');
-    for (final repo in filteredRepos) {
+    for (final repo in dependencies) {
       b.writeln(
           'class Mock${repo.type} extends Mock implements ${repo.type} {}');
     }
@@ -185,26 +264,24 @@ class TestGenerator {
   }
 
   void _group(StringBuffer b, NotifierInfo n) {
-    final filteredRepos = _featureRepositories(n)
-        .where((r) => _isRepositoryInterface(r.type))
-        .toList();
+    final dependencies = _mockableDependencies(n);
 
     b.writeln("  group('${n.className}', () {");
 
-    for (final repo in filteredRepos) {
+    for (final repo in dependencies) {
       b.writeln('    late Mock${repo.type} mock${repo.type};');
     }
     b.writeln('    late ProviderContainer container;');
     b.writeln();
 
-    _setUp(b, n, filteredRepos);
+    _setUp(b, n, dependencies);
     _tearDown(b);
 
     final publicMethods =
-        n.methods.where((m) => !m.name.startsWith('p')).toList();
+        n.methods.where((m) => !_isInternalHelper(m.name)).toList();
 
     for (final method in publicMethods) {
-      _methodTests(b, method, n, filteredRepos);
+      _methodTests(b, method, n, dependencies);
     }
 
     b.writeln('  });');
@@ -213,24 +290,30 @@ class TestGenerator {
   // ── setUp ────────────────────────────────────────────────────────────────
 
   void _setUp(
-      StringBuffer b, NotifierInfo n, List<RepositoryDep> filteredRepos) {
+      StringBuffer b, NotifierInfo n, List<RepositoryDep> dependencies) {
     b.writeln('    setUp(() {');
 
-    for (final repo in filteredRepos) {
+    for (final repo in dependencies) {
       b.writeln('      mock${repo.type} = Mock${repo.type}();');
     }
 
     b.writeln();
     b.writeln('      container = ProviderContainer(');
 
-    if (filteredRepos.isNotEmpty) {
+    if (dependencies.isNotEmpty) {
       b.writeln('        overrides: [');
-      for (final repo in filteredRepos) {
+      for (final repo in dependencies) {
         final provider =
             repo.providerExpression ?? '${_lcFirst(repo.type)}Provider';
         b.writeln(
             '          // Override the provider so the notifier gets mock${repo.type}');
-        b.writeln('          $provider.overrideWithValue(mock${repo.type}),');
+        if (_isNotifierType(repo.type)) {
+          b.writeln(
+              '          $provider.overrideWith(() => mock${repo.type}),');
+        } else {
+          b.writeln(
+              '          $provider.overrideWithValue(mock${repo.type}),');
+        }
       }
       b.writeln('        ],');
     }
@@ -252,26 +335,26 @@ class TestGenerator {
   // ── per-method tests ─────────────────────────────────────────────────────
 
   void _methodTests(StringBuffer b, MethodInfo method, NotifierInfo n,
-      List<RepositoryDep> filteredRepos) {
+      List<RepositoryDep> dependencies) {
     b.writeln(
         '    // ── ${method.name}() ──────────────────────────────────────');
     b.writeln("    group('${method.name}', () {");
 
-    _methodSuccessTest(b, method, n, filteredRepos);
-    _methodErrorTest(b, method, n, filteredRepos);
+    _methodSuccessTest(b, method, n, dependencies);
+    _methodErrorTest(b, method, n, dependencies);
 
     b.writeln('    });');
     b.writeln();
   }
 
   void _methodSuccessTest(StringBuffer b, MethodInfo method, NotifierInfo n,
-      List<RepositoryDep> filteredRepos) {
+      List<RepositoryDep> dependencies) {
     final awaitKw = method.isAsync ? 'await ' : '';
     final notifierProvider = '${_lcFirst(n.className)}Provider';
 
     b.writeln("      test('${method.name} completes successfully', () async {");
 
-    _stubOnlyCalledMethods(b, method, n, filteredRepos);
+    _stubOnlyCalledMethods(b, method, n, dependencies);
 
     if (method.params.isNotEmpty) {
       b.writeln();
@@ -284,7 +367,7 @@ class TestGenerator {
 
     b.writeln();
     b.writeln('        // Ensure notifier is initialised');
-    b.writeln('        await container.read($notifierProvider.future);');
+    _initializeNotifier(b, n, notifierProvider);
 
     b.writeln();
     b.writeln('        // Act');
@@ -317,13 +400,14 @@ class TestGenerator {
   }
 
   void _methodErrorTest(StringBuffer b, MethodInfo method, NotifierInfo n,
-      List<RepositoryDep> filteredRepos) {
+      List<RepositoryDep> dependencies) {
+    final awaitKw = method.isAsync ? 'await ' : '';
     final notifierProvider = '${_lcFirst(n.className)}Provider';
 
     b.writeln(
         "      test('${method.name} shows an error when the repository fails', () async {");
 
-    _stubOnlyCalledMethods(b, method, n, filteredRepos, shouldThrow: true);
+    _stubOnlyCalledMethods(b, method, n, dependencies, shouldThrow: true);
 
     if (method.params.isNotEmpty) {
       b.writeln();
@@ -336,14 +420,14 @@ class TestGenerator {
 
     b.writeln();
     b.writeln('        // Ensure notifier is initialised');
-    b.writeln('        await container.read($notifierProvider.future);');
+    _initializeNotifier(b, n, notifierProvider);
 
     b.writeln();
     b.writeln('        // Act');
 
     final args = _buildArgList(method.params);
     final call =
-        '        await container.read($notifierProvider.notifier).${method.name}($args);';
+        '        ${awaitKw}container.read($notifierProvider.notifier).${method.name}($args);';
     b.writeln(call);
 
     b.writeln();
@@ -361,6 +445,19 @@ class TestGenerator {
 
     b.writeln('      });');
     b.writeln();
+  }
+
+  /// Emits the notifier-initialisation line. `AsyncNotifier` providers expose
+  /// `.future` and must be awaited before the state settles; plain
+  /// `Notifier` providers build synchronously and have no `.future` getter,
+  /// so simply reading the provider is enough to trigger `build()`.
+  void _initializeNotifier(
+      StringBuffer b, NotifierInfo n, String notifierProvider) {
+    if (n.isAsync) {
+      b.writeln('        await container.read($notifierProvider.future);');
+    } else {
+      b.writeln('        container.read($notifierProvider);');
+    }
   }
 
   // ── Generate state field assertions ──────────────────────────────────────
@@ -408,13 +505,13 @@ class TestGenerator {
     StringBuffer b,
     MethodInfo method,
     NotifierInfo n,
-    List<RepositoryDep> filteredRepos, {
+    List<RepositoryDep> dependencies, {
     bool shouldThrow = false,
   }) {
-    if (filteredRepos.isEmpty) return;
+    if (dependencies.isEmpty) return;
 
     b.writeln('        // Arrange: stub repositories');
-    for (final repo in filteredRepos) {
+    for (final repo in dependencies) {
       final calls = MethodCallDetector.detectRepositoryMethodCalls(
         n.sourceFilePath,
         repo.type,
@@ -424,7 +521,10 @@ class TestGenerator {
       if (calls.isEmpty) {
         b.writeln('        // No mocks needed for ${repo.type}');
       } else {
-        final repoInterfacePath = _repositoryInterfacePath(repo, n);
+        // Only Repository-suffixed types follow the folder convention we can
+        // use to resolve a real return type; everything else stubs `null`.
+        final repoInterfacePath =
+            _isRepositorySuffix(repo.type) ? _repositoryInterfacePath(repo, n) : null;
 
         for (final call in calls) {
           b.writeln(
@@ -434,10 +534,10 @@ class TestGenerator {
             b.writeln(
                 "            .thenThrow(Exception('Simulated ${method.name} failure'));");
           } else {
-            final returnType = MethodCallDetector.resolveReturnType(
-              repoInterfacePath,
-              call.methodName,
-            );
+            final returnType = repoInterfacePath == null
+                ? null
+                : MethodCallDetector.resolveReturnType(
+                    repoInterfacePath, call.methodName);
             final returnVal = _stubReturnValue(returnType);
             b.writeln('            .thenAnswer((_) async => $returnVal);');
           }
@@ -487,44 +587,49 @@ class TestGenerator {
     return '';
   }
 
-  List<RepositoryDep> _featureRepositories(NotifierInfo n) {
-    final featureName = _extractFeatureName(n.importPath);
-    if (featureName.isEmpty) return const [];
+  /// Every dependency worth mocking for [n]. A dependency reached via
+  /// `ref.read()`/`ref.watch()` is always mocked, since that call is itself
+  /// the DI seam the app relies on to substitute a fake in tests — this is
+  /// what covers raw SDK types (`FlutterSecureStorage`, `FirebaseAuth`, a
+  /// `Dio` client, ...) and other notifiers alike, regardless of their type
+  /// name. Dependencies found only as a plain class field (no provider
+  /// expression) fall back to a name-suffix heuristic.
+  List<RepositoryDep> _mockableDependencies(NotifierInfo n) => n.repositories
+      .where((r) => r.providerExpression != null || _looksLikeMockableName(r.type))
+      .toList();
 
-    return n.repositories
-        .where((repo) => _isFeatureRepository(repo.type, featureName))
-        .toList();
-  }
-
-  bool _isFeatureRepository(String repoType, String featureName) {
-    final normalizedRepo = repoType
-        .replaceAll('Impl', '')
-        .replaceAll(RegExp(r'[^a-zA-Z0-9]'), '')
-        .toLowerCase();
-
-    final normalizedFeature =
-        featureName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase();
-
-    if (normalizedRepo.isEmpty || normalizedFeature.isEmpty) return false;
-    if (normalizedRepo == normalizedFeature) return true;
-    if (normalizedRepo.contains(normalizedFeature)) return true;
-
-    final featureTokens = normalizedFeature
-        .split(RegExp(r'[_\- ]+'))
-        .where((token) => token.isNotEmpty)
-        .toSet();
-
-    return featureTokens.any((token) => normalizedRepo.contains(token));
-  }
-
-  bool _isRepositoryInterface(String type) {
+  bool _looksLikeMockableName(String type) {
     final lower = type.toLowerCase();
-    return lower.endsWith('repository') &&
-        !lower.contains('service') &&
-        !lower.contains('datasource') &&
-        !lower.contains('client') &&
-        !lower.contains('api');
+    return lower.endsWith('repository') ||
+        lower.endsWith('service') ||
+        lower.endsWith('datasource') ||
+        lower.endsWith('client') ||
+        lower.endsWith('api') ||
+        lower.endsWith('notifier') ||
+        lower.endsWith('cubit') ||
+        lower.endsWith('bloc') ||
+        lower.endsWith('viewmodel');
   }
+
+  bool _isRepositorySuffix(String type) => type.toLowerCase().endsWith('repository');
+
+  /// Riverpod `Notifier`/`AsyncNotifier` (and Bloc/Cubit) dependencies need
+  /// their provider substituted via `overrideWith(() => instance)`, since
+  /// their provider exposes the notifier's *state*, not the notifier
+  /// instance itself — `overrideWithValue` would try to assign the mock as
+  /// if it were a state value and fail to compile.
+  bool _isNotifierType(String type) {
+    final lower = type.toLowerCase();
+    return lower.endsWith('notifier') ||
+        lower.endsWith('cubit') ||
+        lower.endsWith('bloc') ||
+        lower.endsWith('viewmodel');
+  }
+
+  /// Matches internal helper methods following the `pXxx` naming convention
+  /// (e.g. `pOnSuccess`, `pOnError`) without excluding real public methods
+  /// that merely start with a lowercase `p` (`parse`, `publish`, `pay`, ...).
+  bool _isInternalHelper(String name) => RegExp(r'^p[A-Z]').hasMatch(name);
 
   String _toSnakeCase(String name) => name
       .replaceAllMapped(

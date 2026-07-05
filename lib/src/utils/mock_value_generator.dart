@@ -41,8 +41,13 @@ class MockValueGenerator {
       case 'Uri':
         return "Uri.parse('https://example.com')";
       default:
-        // Unknown / custom type used as a parameter — generate a Fake stub.
-        return 'Fake$type()';
+        // Unknown / custom type used as a parameter — construct a minimal
+        // instance via the same `.empty()` convention used for repository
+        // stub return values. A `Fake` from mocktail is only meant to be used
+        // as an `any()`/`registerFallbackValue` matcher, not as a real value
+        // fed into the notifier's own logic, and no `Fake$type` class is ever
+        // generated, so using it here would produce a non-compiling test.
+        return '$type.empty()';
     }
   }
 
