@@ -119,13 +119,20 @@ class TestGenerator {
     final imports = <String>{};
     final featureName = _extractFeatureName(n.importPath);
     final publicMethods = n.methods.where((m) => !_isInternalHelper(m.name));
+    // `build()` is scanned too — its stubs now live in setUp() rather than a
+    // test group, but any custom entity type they return still needs an
+    // import for `.empty()` to resolve.
+    final methodNames = [
+      ...publicMethods.map((m) => m.name),
+      if (n.buildMethod != null) n.buildMethod!.name,
+    ];
 
-    for (final method in publicMethods) {
+    for (final methodName in methodNames) {
       for (final repo in repositoryDeps) {
         final calls = MethodCallDetector.detectRepositoryMethodCalls(
           n.sourceFilePath,
           repo.type,
-          methodName: method.name,
+          methodName: methodName,
         );
 
         final repoInterfacePath = _repositoryInterfacePath(repo, n);
@@ -353,6 +360,9 @@ class TestGenerator {
 
   void _group(StringBuffer b, NotifierInfo n) {
     final dependencies = _mockableDependencies(n);
+    // Calls `build()` makes on each dependency — stubbed once in setUp()
+    // instead of being repeated (identically) inside every method's test.
+    final buildCalls = _buildMethodCalls(n, dependencies);
 
     b.writeln("  group('${n.className}', () {");
 
@@ -362,23 +372,50 @@ class TestGenerator {
     b.writeln('    late ProviderContainer container;');
     b.writeln();
 
-    _setUp(b, n, dependencies);
+    _setUp(b, n, dependencies, buildCalls);
     _tearDown(b);
 
     final publicMethods =
         n.methods.where((m) => !_isInternalHelper(m.name)).toList();
 
     for (final method in publicMethods) {
-      _methodTests(b, method, n, dependencies);
+      _methodTests(b, method, n, dependencies, buildCalls);
     }
 
     b.writeln('  });');
   }
 
+  /// Detects the calls `build()` makes on each dependency, keyed by
+  /// dependency type. These are stubbed once in `setUp()` (so "Ensure
+  /// notifier is initialised" doesn't throw `MissingStubError`) rather than
+  /// per method test.
+  Map<String, List<RepositoryMethodCall>> _buildMethodCalls(
+      NotifierInfo n, List<RepositoryDep> dependencies) {
+    final buildMethodName = n.buildMethod?.name;
+    if (buildMethodName == null) return const {};
+
+    final result = <String, List<RepositoryMethodCall>>{};
+    for (final repo in dependencies) {
+      final calls = MethodCallDetector.detectRepositoryMethodCalls(
+        n.sourceFilePath,
+        repo.type,
+        methodName: buildMethodName,
+      );
+      if (calls.isNotEmpty) {
+        result[repo.type] = calls;
+      }
+    }
+    return result;
+  }
+
   // ── setUp ────────────────────────────────────────────────────────────────
 
   void _setUp(
-      StringBuffer b, NotifierInfo n, List<RepositoryDep> dependencies) {
+    StringBuffer b,
+    NotifierInfo n,
+    List<RepositoryDep> dependencies,
+    Map<String, List<RepositoryMethodCall>> buildCalls,
+  ) {
     b.writeln('    setUp(() {');
 
     for (final repo in dependencies) {
@@ -414,6 +451,31 @@ class TestGenerator {
     }
 
     b.writeln('      );');
+
+    if (buildCalls.isNotEmpty) {
+      b.writeln();
+      b.writeln('      // Arrange: stub dependencies used by build()');
+      for (final repo in dependencies) {
+        final calls = buildCalls[repo.type];
+        if (calls == null) continue;
+
+        final repoInterfacePath = _isRepositorySuffix(repo.type)
+            ? _repositoryInterfacePath(repo, n)
+            : null;
+
+        for (final call in calls) {
+          final returnType = repoInterfacePath == null
+              ? null
+              : MethodCallDetector.resolveReturnType(
+                  repoInterfacePath, call.methodName);
+          final returnVal = _stubReturnValue(returnType);
+          b.writeln(
+              '      when(() => mock${repo.type}.${call.invocationSource})');
+          b.writeln('          .thenAnswer((_) async => $returnVal);');
+        }
+      }
+    }
+
     b.writeln('    });');
     b.writeln();
   }
@@ -429,27 +491,37 @@ class TestGenerator {
 
   // ── per-method tests ─────────────────────────────────────────────────────
 
-  void _methodTests(StringBuffer b, MethodInfo method, NotifierInfo n,
-      List<RepositoryDep> dependencies) {
+  void _methodTests(
+    StringBuffer b,
+    MethodInfo method,
+    NotifierInfo n,
+    List<RepositoryDep> dependencies,
+    Map<String, List<RepositoryMethodCall>> buildCalls,
+  ) {
     b.writeln(
         '    // ── ${method.name}() ──────────────────────────────────────');
     b.writeln("    group('${method.name}', () {");
 
-    _methodSuccessTest(b, method, n, dependencies);
-    _methodErrorTest(b, method, n, dependencies);
+    _methodSuccessTest(b, method, n, dependencies, buildCalls);
+    _methodErrorTest(b, method, n, dependencies, buildCalls);
 
     b.writeln('    });');
     b.writeln();
   }
 
-  void _methodSuccessTest(StringBuffer b, MethodInfo method, NotifierInfo n,
-      List<RepositoryDep> dependencies) {
+  void _methodSuccessTest(
+    StringBuffer b,
+    MethodInfo method,
+    NotifierInfo n,
+    List<RepositoryDep> dependencies,
+    Map<String, List<RepositoryMethodCall>> buildCalls,
+  ) {
     final awaitKw = method.isAsync ? 'await ' : '';
     final notifierProvider = '${_lcFirst(n.className)}Provider';
 
     b.writeln("      test('${method.name} completes successfully', () async {");
 
-    _stubOnlyCalledMethods(b, method, n, dependencies);
+    _stubOnlyCalledMethods(b, method, n, dependencies, buildCalls);
 
     if (method.params.isNotEmpty) {
       b.writeln();
@@ -493,15 +565,21 @@ class TestGenerator {
     b.writeln();
   }
 
-  void _methodErrorTest(StringBuffer b, MethodInfo method, NotifierInfo n,
-      List<RepositoryDep> dependencies) {
+  void _methodErrorTest(
+    StringBuffer b,
+    MethodInfo method,
+    NotifierInfo n,
+    List<RepositoryDep> dependencies,
+    Map<String, List<RepositoryMethodCall>> buildCalls,
+  ) {
     final awaitKw = method.isAsync ? 'await ' : '';
     final notifierProvider = '${_lcFirst(n.className)}Provider';
 
     b.writeln(
         "      test('${method.name} shows an error when the repository fails', () async {");
 
-    _stubOnlyCalledMethods(b, method, n, dependencies, shouldThrow: true);
+    _stubOnlyCalledMethods(b, method, n, dependencies, buildCalls,
+        shouldThrow: true);
 
     if (method.params.isNotEmpty) {
       b.writeln();
@@ -598,7 +676,8 @@ class TestGenerator {
     StringBuffer b,
     MethodInfo method,
     NotifierInfo n,
-    List<RepositoryDep> dependencies, {
+    List<RepositoryDep> dependencies,
+    Map<String, List<RepositoryMethodCall>> buildCalls, {
     bool shouldThrow = false,
   }) {
     if (dependencies.isEmpty) return;
@@ -611,15 +690,29 @@ class TestGenerator {
         methodName: method.name,
       );
 
+      // Anything build() already calls on this dependency is stubbed once in
+      // setUp() — repeating an identical `when()` in every single method's
+      // test just to satisfy the same build()-time call isn't needed, and is
+      // exactly the copy-pasted duplication this is meant to avoid.
+      final alreadyStubbedInSetUp = (buildCalls[repo.type] ?? const [])
+          .map((c) => c.methodName)
+          .toSet();
+      final remaining = calls
+          .where((c) => !alreadyStubbedInSetUp.contains(c.methodName))
+          .toList();
+
       if (calls.isEmpty) {
         b.writeln('        // No mocks needed for ${repo.type}');
+      } else if (remaining.isEmpty) {
+        b.writeln(
+            '        // ${repo.type} already stubbed in setUp() for build()');
       } else {
         // Only Repository-suffixed types follow the folder convention we can
         // use to resolve a real return type; everything else stubs `null`.
         final repoInterfacePath =
             _isRepositorySuffix(repo.type) ? _repositoryInterfacePath(repo, n) : null;
 
-        for (final call in calls) {
+        for (final call in remaining) {
           b.writeln(
               '        when(() => mock${repo.type}.${call.invocationSource})');
 

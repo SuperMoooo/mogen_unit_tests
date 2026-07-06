@@ -1395,5 +1395,126 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         tempDir.deleteSync(recursive: true);
       }
     });
+
+    test(
+        'stubs build()\'s dependency calls once in setUp(), after the '
+        'overrides, instead of repeating them inside every method test', () {
+      final tempDir = Directory.systemTemp.createTempSync('mogen_test_');
+      try {
+        final file =
+            File('${tempDir.path}${Platform.pathSeparator}auth_notifier.dart');
+        file.writeAsStringSync('''
+class AuthNotifier extends AsyncNotifier<AuthState> {
+  @override
+  Future<AuthState> build() async {
+    ref.read(routerProvider).push('/splash');
+    await ref.read(userNotifierProvider.notifier).refreshProfile();
+    await ref.read(userRepositoryProvider).syncSession();
+    return AuthState.empty();
+  }
+
+  Future<void> login({required String email, required String password}) async {
+    await ref.read(authRepositoryProvider).login(email: email, password: password);
+    // Also navigates — same `push` call build() already stubs in setUp(),
+    // so login()'s own arrange block shouldn't re-declare it.
+    ref.read(routerProvider).push('/home');
+  }
+}
+''');
+
+        final notifier = NotifierInfo(
+          className: 'AuthNotifier',
+          sourceFilePath: file.path,
+          importPath:
+              'package:app/features/auth/presentation/notifiers/auth_notifier.dart',
+          packageName: 'app',
+          stateType: 'AuthState',
+          isAsync: true,
+          repositories: const [
+            RepositoryDep(
+              type: 'GoRouter',
+              name: 'goRouter',
+              providerExpression: 'routerProvider',
+            ),
+            RepositoryDep(
+              type: 'UserNotifier',
+              name: 'userNotifier',
+              providerExpression: 'userNotifierProvider.notifier',
+            ),
+            RepositoryDep(
+              type: 'UserRepository',
+              name: 'userRepository',
+              providerExpression: 'userRepositoryProvider',
+            ),
+            RepositoryDep(
+              type: 'AuthRepository',
+              name: 'authRepository',
+              providerExpression: 'authRepositoryProvider',
+            ),
+          ],
+          buildMethod: const MethodInfo(
+            name: 'build',
+            returnType: 'FutureOr<AuthState>',
+            isAsync: true,
+            params: [],
+            isBuild: true,
+          ),
+          methods: const [
+            MethodInfo(
+              name: 'login',
+              returnType: 'Future<void>',
+              isAsync: true,
+              params: [
+                ParamInfo(name: 'email', type: 'String', isNamed: true),
+                ParamInfo(name: 'password', type: 'String', isNamed: true),
+              ],
+            ),
+          ],
+        );
+
+        final output = generator.generate(notifier);
+
+        // build()'s calls are stubbed once in setUp(), positioned after the
+        // ProviderContainer overrides.
+        final setUpSection = output.substring(
+          output.indexOf('setUp('),
+          output.indexOf("group('login'"),
+        );
+        expect(setUpSection, contains('// Arrange: stub dependencies used by build()'));
+        expect(setUpSection, contains('mockGoRouter.push('));
+        expect(setUpSection, contains('mockUserNotifier.refreshProfile('));
+        expect(setUpSection, contains('mockUserRepository.syncSession('));
+        expect(
+          setUpSection.indexOf('overrides: ['),
+          lessThan(setUpSection.indexOf('mockGoRouter.push(')),
+        );
+
+        // login()'s own tests only stub what login() itself calls — build()'s
+        // dependencies are already covered by setUp() and must not repeat.
+        final loginSection = output.substring(output.indexOf("group('login'"));
+        expect(loginSection, contains('mockAuthRepository.login('));
+        expect(loginSection, contains('// No mocks needed for UserNotifier'));
+        expect(loginSection, contains('// No mocks needed for UserRepository'));
+        expect(
+          loginSection,
+          isNot(contains('mockUserNotifier.refreshProfile(')),
+        );
+        expect(
+          loginSection,
+          isNot(contains('mockUserRepository.syncSession(')),
+        );
+
+        // login() *also* calls `router.push(...)` itself — the same call
+        // build() already stubs in setUp() — so it must be deduplicated
+        // rather than redeclared with an identical `when()`.
+        expect(loginSection, isNot(contains('mockGoRouter.push(')));
+        expect(
+          loginSection,
+          contains('// GoRouter already stubbed in setUp() for build()'),
+        );
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
   });
 }
