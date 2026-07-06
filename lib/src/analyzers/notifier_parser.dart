@@ -8,6 +8,7 @@ import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:path/path.dart' as p;
 
 import '../models/notifier_info.dart';
+import '../utils/provider_type_resolver.dart';
 
 /// Parses a notifier source file and returns all [NotifierInfo] found.
 class NotifierParser {
@@ -282,8 +283,7 @@ class _RepoRefVisitor extends RecursiveAstVisitor<void> {
     final cleaned = providerExpr.replaceAll(RegExp(r'\.notifier\b'), '').trim();
     final match = RegExp(r'^([a-z][a-zA-Z0-9]*)Provider').firstMatch(cleaned);
     if (match == null) return null;
-    final camel = match.group(1)!;
-    return camel[0].toUpperCase() + camel.substring(1);
+    return ProviderTypeResolver.resolve(match.group(1)!);
   }
 
   String _typeToFieldName(String type) =>

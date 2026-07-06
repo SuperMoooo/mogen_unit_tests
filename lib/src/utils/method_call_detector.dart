@@ -5,6 +5,8 @@ import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 
+import 'provider_type_resolver.dart';
+
 /// Detects method calls made on a specific repository type within source code.
 ///
 /// This detector looks for patterns like:
@@ -160,7 +162,7 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
           varName == 'repo' ||
           varName == '_repository' ||
           varName == 'repository' ||
-          _camelToTitle(varName) == repoType;
+          ProviderTypeResolver.resolve(varName) == repoType;
     }
 
     return false;
@@ -214,20 +216,15 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
 
   bool _providerMatchesRepo(String providerExpr) {
     final cleaned = providerExpr.replaceAll('Provider', '').trim();
-    final typeFromProvider = _camelToTitle(cleaned);
+    final typeFromProvider = ProviderTypeResolver.resolve(cleaned);
     return typeFromProvider == repoType;
   }
 
   bool _isRepositoryVariable(String varName, String repoType) {
-    final typeName = _camelToTitle(varName);
+    final typeName = ProviderTypeResolver.resolve(varName);
     return typeName == repoType ||
         varName == _lcFirst(repoType) ||
         varName == '_${_lcFirst(repoType)}';
-  }
-
-  String _camelToTitle(String camel) {
-    if (camel.isEmpty) return camel;
-    return camel[0].toUpperCase() + camel.substring(1);
   }
 
   String _lcFirst(String s) =>

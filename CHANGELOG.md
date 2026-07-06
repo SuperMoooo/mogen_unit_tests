@@ -1,5 +1,5 @@
-## [1.1.1]
+# [1.1.2]
 
-### Feat
+## Feat
 
-- FIXES
+- DUPLICATION ERRORS, IMPORT ERRORS, MISSING IMPORTS

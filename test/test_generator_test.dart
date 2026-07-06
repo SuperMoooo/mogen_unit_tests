@@ -663,11 +663,44 @@ class AuthNotifier {
         expect(output,
             contains("test('login shows an error when the repository fails'"));
         expect(output, contains('when(() => mockAuthRepository.login())'));
-        expect(output,
-            contains("thenThrow(Exception('Simulated login failure'))"));
+        expect(output, contains('thenThrow(AppException.test())'));
+
+        // The AppException import should only be emitted because it's
+        // actually used in the error-path scaffold above.
+        expect(
+          output,
+          contains("import 'package:app/core/errors/app_exception.dart';"),
+        );
       } finally {
         tempDir.deleteSync(recursive: true);
       }
+    });
+
+    test('does not import AppException when no error stub needs it', () {
+      const notifier = NotifierInfo(
+        className: 'SimpleNotifier',
+        sourceFilePath: '/tmp/simple_notifier.dart',
+        importPath:
+            'package:app/features/simple/presentation/notifiers/simple_notifier.dart',
+        packageName: 'app',
+        stateType: 'SimpleState',
+        isAsync: true,
+        repositories: const [],
+        buildMethod: null,
+        methods: const [
+          MethodInfo(
+            name: 'doNothing',
+            returnType: 'Future<void>',
+            isAsync: true,
+            params: [],
+          ),
+        ],
+      );
+
+      final output = generator.generate(notifier);
+
+      expect(output, isNot(contains('AppException')));
+      expect(output, isNot(contains('app_exception.dart')));
     });
 
     test('generates only success test case per method', () {
@@ -971,6 +1004,206 @@ class AuthNotifier {
       expect(output, contains("group('publish'"));
       // `pOnSuccess` still matches the internal-helper convention.
       expect(output, isNot(contains("group('pOnSuccess'")));
+    });
+
+    test('mocks a router dependency as GoRouter from go_router', () {
+      const notifier = NotifierInfo(
+        className: 'AuthNotifier',
+        sourceFilePath: '/tmp/auth_notifier.dart',
+        importPath:
+            'package:app/features/auth/presentation/notifiers/auth_notifier.dart',
+        packageName: 'app',
+        stateType: 'AuthState',
+        isAsync: true,
+        repositories: const [
+          RepositoryDep(
+            type: 'GoRouter',
+            name: 'router',
+            providerExpression: 'routerProvider',
+          ),
+        ],
+        buildMethod: null,
+        methods: const [
+          MethodInfo(
+            name: 'login',
+            returnType: 'Future<void>',
+            isAsync: true,
+            params: [],
+          ),
+        ],
+      );
+
+      final output = generator.generate(notifier);
+
+      // The provider name heuristic would naively guess `Router`, which
+      // isn't a concrete, mockable navigation type — these apps always
+      // store a `GoRouter` behind `routerProvider`.
+      expect(output, contains('class MockGoRouter extends Mock implements GoRouter {}'));
+      expect(
+        output,
+        contains("import 'package:go_router/go_router.dart';"),
+      );
+      expect(output, isNot(contains('TODO(mogen_unit_tests)')));
+      expect(output, isNot(contains('implements Router')));
+    });
+
+    test(
+        'adds the interface import alongside a source-discovered impl-only '
+        'import for a Repository dependency', () {
+      const notifier = NotifierInfo(
+        className: 'AuthNotifier',
+        sourceFilePath: '/tmp/auth_notifier.dart',
+        importPath:
+            'package:app/features/auth/presentation/notifiers/auth_notifier.dart',
+        packageName: 'app',
+        stateType: 'AuthState',
+        isAsync: true,
+        repositories: const [
+          RepositoryDep(
+            type: 'AuthRepository',
+            name: 'authRepository',
+            providerExpression: 'authRepositoryProvider',
+          ),
+        ],
+        buildMethod: null,
+        methods: const [
+          MethodInfo(
+            name: 'login',
+            returnType: 'Future<void>',
+            isAsync: true,
+            params: [],
+          ),
+        ],
+        // The notifier's own source only imports the impl file (e.g.
+        // because that's where `authRepositoryProvider` is declared) —
+        // it never imports the bare interface file directly.
+        sourceImports: [
+          'package:app/features/auth/data/repositories/auth_repository_impl.dart',
+        ],
+      );
+
+      final output = generator.generate(notifier);
+
+      // `implements AuthRepository` needs the interface import even though
+      // the notifier's own source never imports it directly.
+      expect(
+        output,
+        contains(
+            "import 'package:app/features/auth/domain/repositories/auth_repository.dart';"),
+      );
+      expect(
+        output,
+        contains(
+            "import 'package:app/features/auth/data/repositories/auth_repository_impl.dart';"),
+      );
+      expect(output, isNot(contains('TODO(mogen_unit_tests)')));
+    });
+
+    test(
+        'does not stub a method on dependencies that method never actually '
+        'calls, even when several dependencies share the same method name '
+        'across different notifier methods', () {
+      final tempDir = Directory.systemTemp.createTempSync('mogen_test_');
+      try {
+        final file =
+            File('${tempDir.path}${Platform.pathSeparator}auth_notifier.dart');
+        file.writeAsStringSync('''
+class AuthNotifier extends AsyncNotifier<AuthState> {
+  @override
+  Future<AuthState> build() async {
+    // Touched only in build() — must not leak into login()/logout().
+    ref.read(routerProvider).push('/splash');
+    ref.read(userNotifierProvider.notifier);
+    return AuthState.empty();
+  }
+
+  Future<void> login({required String email, required String password}) async {
+    await ref.read(authRepositoryProvider).login(email: email, password: password);
+    await ref.read(localAuthProvider).login(email: email, password: password);
+  }
+
+  Future<void> logout() async {
+    await ref.read(authRepositoryProvider).logout();
+    ref.read(routerProvider).go('/login');
+  }
+}
+''');
+
+        final notifier = NotifierInfo(
+          className: 'AuthNotifier',
+          sourceFilePath: file.path,
+          importPath:
+              'package:app/features/auth/presentation/notifiers/auth_notifier.dart',
+          packageName: 'app',
+          stateType: 'AuthState',
+          isAsync: true,
+          repositories: const [
+            RepositoryDep(
+              type: 'GoRouter',
+              name: 'goRouter',
+              providerExpression: 'routerProvider',
+            ),
+            RepositoryDep(
+              type: 'UserNotifier',
+              name: 'userNotifier',
+              providerExpression: 'userNotifierProvider.notifier',
+            ),
+            RepositoryDep(
+              type: 'AuthRepository',
+              name: 'authRepository',
+              providerExpression: 'authRepositoryProvider',
+            ),
+            RepositoryDep(
+              type: 'LocalAuth',
+              name: 'localAuth',
+              providerExpression: 'localAuthProvider',
+            ),
+          ],
+          buildMethod: null,
+          methods: const [
+            MethodInfo(
+              name: 'login',
+              returnType: 'Future<void>',
+              isAsync: true,
+              params: [
+                ParamInfo(name: 'email', type: 'String', isNamed: true),
+                ParamInfo(name: 'password', type: 'String', isNamed: true),
+              ],
+            ),
+            MethodInfo(
+              name: 'logout',
+              returnType: 'Future<void>',
+              isAsync: true,
+              params: [],
+            ),
+          ],
+        );
+
+        final output = generator.generate(notifier);
+
+        final loginSection = output.substring(
+          output.indexOf("group('login'"),
+          output.indexOf("group('logout'"),
+        );
+
+        // login() only calls authRepository.login and localAuth.login — the
+        // router and userNotifier must not be stubbed with `.login(...)`
+        // just because they're mocked dependencies of the notifier overall.
+        expect(loginSection, contains('mockAuthRepository.login('));
+        expect(loginSection, contains('mockLocalAuth.login('));
+        expect(loginSection, isNot(contains('mockGoRouter.login(')));
+        expect(loginSection, isNot(contains('mockUserNotifier.login(')));
+        expect(loginSection, contains('// No mocks needed for GoRouter'));
+        expect(loginSection, contains('// No mocks needed for UserNotifier'));
+
+        final logoutSection =
+            output.substring(output.indexOf("group('logout'"));
+        expect(logoutSection, contains('mockAuthRepository.logout('));
+        expect(logoutSection, contains('mockGoRouter.go('));
+        expect(logoutSection, isNot(contains('mockLocalAuth.logout(')));
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
     });
   });
 }
