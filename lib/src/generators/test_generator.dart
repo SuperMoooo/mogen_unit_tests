@@ -1,5 +1,7 @@
 // lib/src/generators/test_generator.dart
 
+import 'dart:io';
+
 import 'package:dart_style/dart_style.dart';
 import 'package:path/path.dart' as p;
 
@@ -231,8 +233,13 @@ class TestGenerator {
         // The notifier's own source only imports the `_impl` file (likely
         // where the provider itself is declared) — the mock class still
         // needs the bare interface type for `implements $Type` to compile,
-        // and the impl file isn't guaranteed to re-export it.
-        final featureName = _extractFeatureName(n.importPath);
+        // and the impl file isn't guaranteed to re-export it. The feature
+        // name is taken from the *resolved impl import* rather than the
+        // notifier's own feature, since the dependency may well live in a
+        // different feature than the notifier consuming it (e.g. an
+        // `AuthNotifier` depending on a `UserRepository` that lives under
+        // `features/user/`, not `features/auth/`).
+        final featureName = _extractFeatureName(fromSource.uri);
         final snakeCase = _toSnakeCase(repo.type);
         return [
           "import 'package:${n.packageName}/features/$featureName/domain/repositories/$snakeCase.dart';",
@@ -243,8 +250,15 @@ class TestGenerator {
     }
 
     if (_isRepositorySuffix(repo.type)) {
-      final featureName = _extractFeatureName(n.importPath);
       final snakeCase = _toSnakeCase(repo.type);
+      // Prefer the feature folder the repository interface actually lives
+      // in on disk — a dependency doesn't necessarily belong to the
+      // consuming notifier's own feature (e.g. an `AuthNotifier` reading a
+      // `UserRepository` that lives under `features/user/`). Only fall back
+      // to assuming the notifier's own feature when nothing is found (e.g.
+      // in unit tests against a fabricated project root).
+      final featureName =
+          _findActualFeatureFolder(snakeCase) ?? _extractFeatureName(n.importPath);
       return [
         "import 'package:${n.packageName}/features/$featureName/domain/repositories/$snakeCase.dart';",
         "import 'package:${n.packageName}/features/$featureName/data/repositories/${snakeCase}_impl.dart';",
@@ -256,6 +270,24 @@ class TestGenerator {
           "'${repo.type}' — add the correct import manually so "
           'Mock${repo.type} compiles.',
     ];
+  }
+
+  /// Scans `lib/features/*/domain/repositories/` on disk for a file named
+  /// `$repositoryFileName.dart` and returns the feature folder it was found
+  /// in, or `null` if no such file exists anywhere in the project.
+  String? _findActualFeatureFolder(String repositoryFileName) {
+    final featuresDir = Directory(p.join(projectRoot, 'lib', 'features'));
+    if (!featuresDir.existsSync()) return null;
+
+    for (final entry in featuresDir.listSync()) {
+      if (entry is! Directory) continue;
+      final candidate = File(p.join(
+          entry.path, 'domain', 'repositories', '$repositoryFileName.dart'));
+      if (candidate.existsSync()) {
+        return p.basename(entry.path);
+      }
+    }
+    return null;
   }
 
   /// Looks for an import already declared in the notifier's own source file
@@ -359,8 +391,15 @@ class TestGenerator {
     if (dependencies.isNotEmpty) {
       b.writeln('        overrides: [');
       for (final repo in dependencies) {
-        final provider =
+        final rawProvider =
             repo.providerExpression ?? '${_lcFirst(repo.type)}Provider';
+        // `.overrideWith`/`.overrideWithValue` apply to the base provider —
+        // `.notifier` and `.future` are just read-time accessors on it, not
+        // separately overridable providers, so a captured provider
+        // expression like `userNotifierProvider.future` (from a source call
+        // such as `ref.read(userNotifierProvider.future)`) must have the
+        // suffix stripped before it's used here.
+        final provider = _baseProviderExpression(rawProvider);
         b.writeln(
             '          // Override the provider so the notifier gets mock${repo.type}');
         if (_isNotifierType(repo.type)) {
@@ -416,8 +455,7 @@ class TestGenerator {
       b.writeln();
       b.writeln('        // Arrange: inputs');
       for (final param in method.params) {
-        final val = MockValueGenerator.forType(param.type);
-        b.writeln('        final ${param.name} = $val;');
+        b.writeln('        ${_inputDeclarationLine(param)}');
       }
     }
 
@@ -469,8 +507,7 @@ class TestGenerator {
       b.writeln();
       b.writeln('        // Arrange: inputs');
       for (final param in method.params) {
-        final val = MockValueGenerator.forType(param.type);
-        b.writeln('        final ${param.name} = $val;');
+        b.writeln('        ${_inputDeclarationLine(param)}');
       }
     }
 
@@ -632,6 +669,49 @@ class TestGenerator {
 
   String _lcFirst(String s) =>
       s.isEmpty ? s : s[0].toLowerCase() + s.substring(1);
+
+  /// Strips a trailing `.notifier` or `.future` accessor from a captured
+  /// provider expression, leaving the base provider that `overrideWith`/
+  /// `overrideWithValue` must be called on.
+  String _baseProviderExpression(String expr) =>
+      expr.replaceAll(RegExp(r'\.(notifier|future)\b'), '').trim();
+
+  /// Builds the `Arrange: inputs` declaration for one method parameter,
+  /// using `const` instead of `final` whenever the generated literal is
+  /// guaranteed to be a compile-time constant (satisfies
+  /// `prefer_const_declarations`). Types like `DateTime`, `Uri`, `Future`,
+  /// and custom `.empty()` factories aren't guaranteed const-constructible,
+  /// so those stay `final`.
+  String _inputDeclarationLine(ParamInfo param) {
+    final val = MockValueGenerator.forType(param.type);
+    if (!_isConstCompatible(param.type)) {
+      return 'final ${param.name} = $val;';
+    }
+    // Avoid a redundant nested `const` (e.g. `const foo = const [];`).
+    final cleanedVal =
+        val.startsWith('const ') ? val.substring('const '.length) : val;
+    return 'const ${param.name} = $cleanedVal;';
+  }
+
+  bool _isConstCompatible(String rawType) {
+    final type = rawType.replaceAll('?', '').trim();
+    if (type.startsWith('List<') || type == 'List') return true;
+    if (type.startsWith('Map<') || type == 'Map') return true;
+    if (type.startsWith('Set<') || type == 'Set') return true;
+    switch (type) {
+      case 'String':
+      case 'int':
+      case 'double':
+      case 'num':
+      case 'bool':
+      case 'Duration':
+      case 'dynamic':
+      case 'Object':
+        return true;
+      default:
+        return false;
+    }
+  }
 
   String _extractFeatureName(String importPath) {
     final parts = importPath.split('/');

@@ -328,9 +328,10 @@ void main() {
 
       final output = generator.generate(notifier);
 
-      // Should generate input variables
-      expect(output, contains("final query = '';"));
-      expect(output, contains('final limit = 0;'));
+      // Should generate input variables — `const` since both are
+      // compile-time-constant-compatible primitive literals.
+      expect(output, contains("const query = '';"));
+      expect(output, contains('const limit = 0;'));
 
       // Should use these in the method call
       expect(output, contains('query: query'));
@@ -794,10 +795,18 @@ class AuthNotifier {
 
       // Notifier-shaped dependencies override the provider's *implementation*
       // (overrideWith), not its exposed state value (overrideWithValue).
+      // The override applies to the *base* provider — `.notifier` is just a
+      // read-time accessor, not a separately overridable provider, so the
+      // captured `cartNotifierProvider.notifier` expression must have that
+      // suffix stripped here even though it's kept as-is anywhere else the
+      // captured expression is used verbatim.
       expect(
         output,
-        contains(
-            'cartNotifierProvider.notifier.overrideWith(() => mockCartNotifier)'),
+        contains('cartNotifierProvider.overrideWith(() => mockCartNotifier)'),
+      );
+      expect(
+        output,
+        isNot(contains('cartNotifierProvider.notifier.overrideWith')),
       );
     });
 
@@ -1097,6 +1106,187 @@ class AuthNotifier {
             "import 'package:app/features/auth/data/repositories/auth_repository_impl.dart';"),
       );
       expect(output, isNot(contains('TODO(mogen_unit_tests)')));
+    });
+
+    test(
+        'resolves the interface import from the dependency\'s own feature, '
+        'not the consuming notifier\'s feature', () {
+      const notifier = NotifierInfo(
+        className: 'AuthNotifier',
+        sourceFilePath: '/tmp/auth_notifier.dart',
+        importPath:
+            'package:app/features/auth/presentation/notifiers/auth_notifier.dart',
+        packageName: 'app',
+        stateType: 'AuthState',
+        isAsync: true,
+        repositories: const [
+          RepositoryDep(
+            type: 'UserRepository',
+            name: 'userRepository',
+            providerExpression: 'userRepositoryProvider',
+          ),
+        ],
+        buildMethod: null,
+        methods: const [
+          MethodInfo(
+            name: 'login',
+            returnType: 'Future<void>',
+            isAsync: true,
+            params: [],
+          ),
+        ],
+        // AuthNotifier only ever imports the impl file, and that impl file
+        // lives under the `user` feature — not `auth`.
+        sourceImports: [
+          'package:app/features/user/data/repositories/user_repository_impl.dart',
+        ],
+      );
+
+      final output = generator.generate(notifier);
+
+      // The interface import must use the repository's own feature (`user`)
+      // rather than the notifier's feature (`auth`).
+      expect(
+        output,
+        contains(
+            "import 'package:app/features/user/domain/repositories/user_repository.dart';"),
+      );
+      expect(
+        output,
+        isNot(contains('features/auth/domain/repositories/user_repository.dart')),
+      );
+    });
+
+    test(
+        'strips .future from a captured provider expression before using it '
+        'in overrideWith, since Riverpod overrides apply to the base '
+        'provider', () {
+      const notifier = NotifierInfo(
+        className: 'AuthNotifier',
+        sourceFilePath: '/tmp/auth_notifier.dart',
+        importPath:
+            'package:app/features/auth/presentation/notifiers/auth_notifier.dart',
+        packageName: 'app',
+        stateType: 'AuthState',
+        isAsync: true,
+        repositories: const [
+          RepositoryDep(
+            type: 'UserNotifier',
+            name: 'userNotifier',
+            // Captured verbatim from a source call like
+            // `ref.read(userNotifierProvider.future)`.
+            providerExpression: 'userNotifierProvider.future',
+          ),
+        ],
+        buildMethod: null,
+        methods: const [
+          MethodInfo(
+            name: 'login',
+            returnType: 'Future<void>',
+            isAsync: true,
+            params: [],
+          ),
+        ],
+      );
+
+      final output = generator.generate(notifier);
+
+      expect(
+        output,
+        contains('userNotifierProvider.overrideWith(() => mockUserNotifier)'),
+      );
+      expect(
+        output,
+        isNot(contains('userNotifierProvider.future.overrideWith')),
+      );
+    });
+
+    test('uses const instead of final for compile-time-constant inputs', () {
+      const notifier = NotifierInfo(
+        className: 'SearchNotifier',
+        sourceFilePath: '/tmp/search_notifier.dart',
+        importPath:
+            'package:app/features/search/presentation/notifiers/search_notifier.dart',
+        packageName: 'app',
+        stateType: 'SearchState',
+        isAsync: true,
+        repositories: const [],
+        buildMethod: null,
+        methods: const [
+          MethodInfo(
+            name: 'search',
+            returnType: 'Future<void>',
+            isAsync: true,
+            params: [
+              ParamInfo(name: 'query', type: 'String', isNamed: true),
+              ParamInfo(name: 'limit', type: 'int', isNamed: true),
+              ParamInfo(name: 'tags', type: 'List<String>', isNamed: true),
+              ParamInfo(name: 'startedAt', type: 'DateTime', isNamed: true),
+            ],
+          ),
+        ],
+      );
+
+      final output = generator.generate(notifier);
+
+      // Compile-time-constant-compatible types use `const`.
+      expect(output, contains("const query = '';"));
+      expect(output, contains('const limit = 0;'));
+      expect(output, contains('const tags = [];'));
+      expect(output, isNot(contains('const tags = const [];')));
+
+      // `DateTime` isn't const-constructible — must stay `final`.
+      expect(output, contains('final startedAt = DateTime(2024);'));
+    });
+
+    test(
+        'detects a direct call through a private underscore-prefixed field '
+        '(the common Dart convention), not just a public one', () {
+      final tempDir = Directory.systemTemp.createTempSync('mogen_test_');
+      try {
+        final file =
+            File('${tempDir.path}${Platform.pathSeparator}auth_notifier.dart');
+        file.writeAsStringSync('''
+class AuthNotifier {
+  final AuthRepository _authRepository;
+
+  AuthNotifier(this._authRepository);
+
+  Future<void> login() async {
+    await _authRepository.login();
+  }
+}
+''');
+
+        final notifier = NotifierInfo(
+          className: 'AuthNotifier',
+          sourceFilePath: file.path,
+          importPath:
+              'package:app/features/auth/presentation/notifiers/auth_notifier.dart',
+          packageName: 'app',
+          stateType: 'AuthState',
+          isAsync: true,
+          repositories: const [
+            RepositoryDep(type: 'AuthRepository', name: 'authRepository'),
+          ],
+          buildMethod: null,
+          methods: const [
+            MethodInfo(
+              name: 'login',
+              returnType: 'Future<void>',
+              isAsync: true,
+              params: [],
+            ),
+          ],
+        );
+
+        final output = generator.generate(notifier);
+
+        expect(output, contains('mockAuthRepository.login()'));
+        expect(output, isNot(contains('No mocks needed for AuthRepository')));
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
     });
 
     test(

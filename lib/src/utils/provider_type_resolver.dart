@@ -23,10 +23,17 @@ class ProviderTypeResolver {
 
   /// Converts a camelCase prefix to its PascalCase type name, applying known
   /// overrides where naive capitalization would guess wrong.
+  ///
+  /// Leading underscores are stripped first, since Dart's usual private
+  /// field/getter convention (`_authRepository`) would otherwise capitalize
+  /// to `_authRepository` (the underscore has no uppercase form) instead of
+  /// `AuthRepository`, silently failing to match the type it's the private
+  /// backing field for.
   static String resolve(String camelCasePrefix) {
-    final override = _knownOverrides[camelCasePrefix];
+    final normalized = camelCasePrefix.replaceFirst(RegExp(r'^_+'), '');
+    final override = _knownOverrides[normalized];
     if (override != null) return override;
-    if (camelCasePrefix.isEmpty) return camelCasePrefix;
-    return camelCasePrefix[0].toUpperCase() + camelCasePrefix.substring(1);
+    if (normalized.isEmpty) return normalized;
+    return normalized[0].toUpperCase() + normalized.substring(1);
   }
 }
