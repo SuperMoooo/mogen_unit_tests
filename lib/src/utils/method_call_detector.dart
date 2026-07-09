@@ -83,33 +83,73 @@ class MethodCallDetector {
   static String? resolveReturnType(
     String repoSourcePath,
     String methodName,
+  ) =>
+      resolveMethodSignature(repoSourcePath, methodName)?.returnType;
+
+  /// Resolves the full declared signature (return type + parameter types) of
+  /// [methodName] by parsing the source file at [repoSourcePath].
+  ///
+  /// Returns `null` when the file cannot be read or the method is not found.
+  static MethodSignature? resolveMethodSignature(
+    String repoSourcePath,
+    String methodName,
   ) {
     try {
       final content = File(repoSourcePath).readAsStringSync();
       final parsed = parseString(content: content, path: repoSourcePath);
-      final visitor = _ReturnTypeVisitor(methodName);
+      final visitor = _SignatureVisitor(methodName);
       parsed.unit.visitChildren(visitor);
-      return visitor.returnType;
+      return visitor.signature;
     } catch (_) {
       return null;
     }
   }
 }
 
-// ─── Return-type resolver ────────────────────────────────────────────────────
+/// The declared signature of a dependency method, resolved from its source.
+class MethodSignature {
+  /// Creates a resolved signature.
+  const MethodSignature({this.returnType, this.paramTypes = const []});
 
-class _ReturnTypeVisitor extends RecursiveAstVisitor<void> {
-  _ReturnTypeVisitor(this.targetMethod);
+  /// The declared return type, e.g. `Future<UserEntity>`. `null` when the
+  /// declaration omits it.
+  final String? returnType;
+
+  /// The declared types of every parameter (positional and named alike).
+  /// Parameters without an explicit type are omitted.
+  final List<String> paramTypes;
+}
+
+// ─── Signature resolver ──────────────────────────────────────────────────────
+
+class _SignatureVisitor extends RecursiveAstVisitor<void> {
+  _SignatureVisitor(this.targetMethod);
 
   final String targetMethod;
-  String? returnType;
+  MethodSignature? signature;
 
   @override
   void visitMethodDeclaration(MethodDeclaration node) {
     if (node.name.lexeme == targetMethod) {
-      returnType = node.returnType?.toSource();
+      signature = MethodSignature(
+        returnType: node.returnType?.toSource(),
+        paramTypes: _paramTypes(node.parameters),
+      );
     }
     super.visitMethodDeclaration(node);
+  }
+
+  List<String> _paramTypes(FormalParameterList? list) {
+    if (list == null) return const [];
+    final types = <String>[];
+    for (var param in list.parameters) {
+      if (param is DefaultFormalParameter) param = param.parameter;
+      if (param is SimpleFormalParameter) {
+        final type = param.type?.toSource();
+        if (type != null) types.add(type);
+      }
+    }
+    return types;
   }
 }
 
@@ -215,8 +255,11 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
   }
 
   bool _providerMatchesRepo(String providerExpr) {
-    final cleaned = providerExpr.replaceAll('Provider', '').trim();
-    final typeFromProvider = ProviderTypeResolver.resolve(cleaned);
+    // Shared with the notifier parser so both derive the same type from a
+    // provider expression — including family reads like `chatProvider(id)`,
+    // where the call arguments must not leak into the derived type name.
+    final typeFromProvider =
+        ProviderTypeResolver.typeFromProviderExpression(providerExpr);
     return typeFromProvider == repoType;
   }
 

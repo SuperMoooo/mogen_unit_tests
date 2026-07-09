@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:mogen_unit_tests/src/generators/test_generator.dart';
 import 'package:mogen_unit_tests/src/models/notifier_info.dart';
+import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 void main() {
@@ -198,63 +199,87 @@ void main() {
     });
 
     test('generates state field assertions for known patterns', () {
-      const notifier = NotifierInfo(
-        className: 'FormNotifier',
-        sourceFilePath: '/tmp/form_notifier.dart',
-        importPath:
-            'package:app/features/form/presentation/notifiers/form_notifier.dart',
-        packageName: 'app',
-        stateType: 'FormState',
-        isAsync: true,
-        repositories: const [],
-        buildMethod: null,
-        methods: const [
-          MethodInfo(
-            name: 'submit',
-            returnType: 'Future<void>',
-            isAsync: true,
-            params: [],
-          ),
-        ],
-        stateInfo: StateInfo(
-          className: 'FormState',
+      final tempDir = Directory.systemTemp.createTempSync('mogen_test_');
+      try {
+        final file =
+            File('${tempDir.path}${Platform.pathSeparator}form_notifier.dart');
+        file.writeAsStringSync('''
+class FormNotifier extends AsyncNotifier<FormState> {
+  Future<void> submit() async {
+    await ref.read(formRepositoryProvider).submit();
+    state = AsyncData(state.requireValue.copyWith(success: 'ok'));
+  }
+}
+''');
+
+        final notifier = NotifierInfo(
+          className: 'FormNotifier',
+          sourceFilePath: file.path,
           importPath:
-              'package:app/features/form/presentation/states/form_state.dart',
-          fields: const [
-            StateField(
-              name: 'isLoadingAction',
-              type: 'bool',
-              isNullable: false,
-            ),
-            StateField(
-              name: 'error',
-              type: 'String',
-              isNullable: true,
-            ),
-            StateField(
-              name: 'success',
-              type: 'String',
-              isNullable: true,
+              'package:app/features/form/presentation/notifiers/form_notifier.dart',
+          packageName: 'app',
+          stateType: 'FormState',
+          isAsync: true,
+          repositories: const [
+            RepositoryDep(
+              type: 'FormRepository',
+              name: 'formRepository',
+              providerExpression: 'formRepositoryProvider',
             ),
           ],
-        ),
-      );
+          buildMethod: null,
+          methods: const [
+            MethodInfo(
+              name: 'submit',
+              returnType: 'Future<void>',
+              isAsync: true,
+              params: [],
+            ),
+          ],
+          stateInfo: const StateInfo(
+            className: 'FormState',
+            importPath:
+                'package:app/features/form/presentation/states/form_state.dart',
+            fields: [
+              StateField(
+                name: 'isLoadingAction',
+                type: 'bool',
+                isNullable: false,
+              ),
+              StateField(
+                name: 'error',
+                type: 'String',
+                isNullable: true,
+              ),
+              StateField(
+                name: 'success',
+                type: 'String',
+                isNullable: true,
+              ),
+            ],
+          ),
+        );
 
-      final output = generator.generate(notifier);
+        final output = generator.generate(notifier);
 
-      // Success path should clear the error and surface the success message.
-      expect(
-          output, contains('expect(finalState.requireValue.error, isNull);'));
-      expect(output,
-          contains('expect(finalState.requireValue.success, isNotNull);'));
+        // Success path should clear the error and surface the success message.
+        expect(output,
+            contains('expect(finalState.requireValue.error, isNull);'));
+        expect(output,
+            contains('expect(finalState.requireValue.success, isNotNull);'));
 
-      // Error path should surface the error and clear any success message.
-      expect(output,
-          contains("test('submit shows an error when the repository fails'"));
-      expect(output,
-          contains('expect(finalState.requireValue.error, isNotNull);'));
-      expect(
-          output, contains('expect(finalState.requireValue.success, isNull);'));
+        // Error path should surface the error and clear any success message.
+        expect(
+            output,
+            contains(
+                "test('submit shows an error when the repository fails'"));
+        expect(output,
+            contains('expect(finalState.requireValue.error, isNotNull);'));
+        expect(output,
+            contains('expect(finalState.requireValue.success, isNull);'));
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
     });
 
     test('generates proper async/await syntax for async methods', () {
@@ -592,8 +617,10 @@ class AuthNotifier {
       }
     });
 
-    test('includes error handling test scaffolding for repository failures',
-        () {
+    test(
+        'omits the error-path test when the method makes no dependency '
+        'calls — there is no failure to simulate, so the test could never '
+        'pass', () {
       const notifier = NotifierInfo(
         className: 'RiskyNotifier',
         sourceFilePath: '/tmp/risky_notifier.dart',
@@ -616,8 +643,13 @@ class AuthNotifier {
 
       final output = generator.generate(notifier);
 
-      // The generator should include an explicit failure-path test for each method.
-      expect(output, contains("shows an error when the repository fails"));
+      // No dependencies → nothing can throw → an error test asserting a
+      // non-null error would be guaranteed to fail.
+      expect(output, isNot(contains('shows an error when the repository fails')));
+      expect(output, contains('No error-path test'));
+      // The success test is still generated.
+      expect(output,
+          contains("test('doSomethingRisky completes successfully'"));
     });
 
     test('throws in the error-path scaffold when a repository call exists', () {
@@ -916,35 +948,58 @@ class AuthNotifier {
     });
 
     test('does not force await on the error-path call for a sync method', () {
-      const notifier = NotifierInfo(
-        className: 'CounterNotifier',
-        sourceFilePath: '/tmp/counter_notifier.dart',
-        importPath:
-            'package:app/features/counter/presentation/notifiers/counter_notifier.dart',
-        packageName: 'app',
-        stateType: 'CounterState',
-        isAsync: false,
-        repositories: const [],
-        buildMethod: null,
-        methods: const [
-          MethodInfo(
-            name: 'increment',
-            returnType: 'void',
-            isAsync: false,
-            params: [],
-          ),
-        ],
-      );
+      final tempDir = Directory.systemTemp.createTempSync('mogen_test_');
+      try {
+        final file = File(
+            '${tempDir.path}${Platform.pathSeparator}counter_notifier.dart');
+        file.writeAsStringSync('''
+class CounterNotifier extends Notifier<CounterState> {
+  void increment() {
+    ref.read(analyticsServiceProvider).track();
+  }
+}
+''');
 
-      final output = generator.generate(notifier);
+        final notifier = NotifierInfo(
+          className: 'CounterNotifier',
+          sourceFilePath: file.path,
+          importPath:
+              'package:app/features/counter/presentation/notifiers/counter_notifier.dart',
+          packageName: 'app',
+          stateType: 'CounterState',
+          isAsync: false,
+          repositories: const [
+            RepositoryDep(
+              type: 'AnalyticsService',
+              name: 'analyticsService',
+              providerExpression: 'analyticsServiceProvider',
+            ),
+          ],
+          buildMethod: null,
+          methods: const [
+            MethodInfo(
+              name: 'increment',
+              returnType: 'void',
+              isAsync: false,
+              params: [],
+            ),
+          ],
+        );
 
-      final errorTest = output.substring(
-        output.indexOf("shows an error when the repository fails"),
-      );
-      expect(
-        errorTest,
-        isNot(contains('await container.read(counterNotifierProvider.notifier).increment')),
-      );
+        final output = generator.generate(notifier);
+
+        final errorTest = output.substring(
+          output.indexOf('shows an error when the repository fails'),
+        );
+        expect(errorTest, contains('thenThrow(AppException.test())'));
+        expect(
+          errorTest,
+          isNot(contains(
+              'await container.read(counterNotifierProvider.notifier).increment')),
+        );
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
     });
 
     test('uses .empty() instead of an undefined Fake class for custom-type '
@@ -1505,16 +1560,485 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         );
 
         // login() *also* calls `router.push(...)` itself — the same call
-        // build() already stubs in setUp() — so it must be deduplicated
-        // rather than redeclared with an identical `when()`.
-        expect(loginSection, isNot(contains('mockGoRouter.push(')));
+        // build() already stubs in setUp() — so the *success* test must
+        // deduplicate it rather than redeclare an identical `when()`.
+        final successTest = loginSection.substring(
+          loginSection.indexOf("test('login completes successfully'"),
+          loginSection.indexOf("test('login shows an error"),
+        );
+        expect(successTest, isNot(contains('mockGoRouter.push(')));
         expect(
-          loginSection,
+          successTest,
           contains('// GoRouter already stubbed in setUp() for build()'),
+        );
+
+        // The *error* test is different: setUp()'s stub answers success, so
+        // skipping the call there would leave nothing throwing and the test
+        // could never pass. It must re-stub every call the method makes —
+        // including the build()-shared one — with thenThrow, and only after
+        // the notifier has been initialised (so build() itself still
+        // succeeds).
+        final errorTest =
+            loginSection.substring(loginSection.indexOf("test('login shows an error"));
+        expect(errorTest, contains('mockGoRouter.push('));
+        expect(errorTest, contains('mockAuthRepository.login('));
+        expect(errorTest, contains('thenThrow(AppException.test())'));
+        expect(
+          errorTest.indexOf('container.read(authNotifierProvider.future)'),
+          lessThan(errorTest.indexOf('thenThrow(AppException.test())')),
+          reason: 'the notifier must initialise with the success stubs still '
+              'in effect, before the failure stubs replace them',
         );
       } finally {
         tempDir.deleteSync(recursive: true);
       }
+    });
+
+    test(
+        'registers mocktail fallback values in setUpAll for custom-typed '
+        'parameters, and stubs synchronous methods with thenReturn instead '
+        'of an async answer', () {
+      final tempDir = Directory.systemTemp.createTempSync('mogen_test_');
+      try {
+        // Real repository interface on disk so the generator can resolve
+        // both parameter types and the sync return type.
+        final repoFile = File(p.joinAll([
+          tempDir.path,
+          'lib',
+          'features',
+          'cart',
+          'domain',
+          'repositories',
+          'cart_repository.dart',
+        ]));
+        repoFile.parent.createSync(recursive: true);
+        repoFile.writeAsStringSync('''
+abstract class CartRepository {
+  Future<void> addItem(CartItem item);
+  String getToken();
+}
+''');
+
+        final notifierFile =
+            File('${tempDir.path}${Platform.pathSeparator}cart_notifier.dart');
+        notifierFile.writeAsStringSync('''
+class CartNotifier extends AsyncNotifier<CartState> {
+  Future<void> addItem(CartItem item) async {
+    await ref.read(cartRepositoryProvider).addItem(item);
+  }
+
+  void cacheToken() {
+    ref.read(cartRepositoryProvider).getToken();
+  }
+}
+''');
+
+        final diskGenerator = TestGenerator(projectRoot: tempDir.path);
+        final notifier = NotifierInfo(
+          className: 'CartNotifier',
+          sourceFilePath: notifierFile.path,
+          importPath:
+              'package:app/features/cart/presentation/notifiers/cart_notifier.dart',
+          packageName: 'app',
+          stateType: 'CartState',
+          isAsync: true,
+          repositories: const [
+            RepositoryDep(
+              type: 'CartRepository',
+              name: 'cartRepository',
+              providerExpression: 'cartRepositoryProvider',
+            ),
+          ],
+          buildMethod: null,
+          methods: const [
+            MethodInfo(
+              name: 'addItem',
+              returnType: 'Future<void>',
+              isAsync: true,
+              params: [ParamInfo(name: 'item', type: 'CartItem')],
+            ),
+            MethodInfo(
+              name: 'cacheToken',
+              returnType: 'void',
+              isAsync: false,
+              params: [],
+            ),
+          ],
+        );
+
+        final output = diskGenerator.generate(notifier);
+
+        // `any()` on a non-nullable custom type throws at runtime unless a
+        // fallback instance is registered.
+        expect(output, contains('setUpAll('));
+        expect(output, contains('registerFallbackValue(CartItem.empty());'));
+        // ... and the registered type needs an import to compile.
+        expect(
+          output,
+          contains(
+              "import 'package:app/features/cart/domain/entities/cart_item.dart';"),
+        );
+
+        // `String getToken()` is synchronous — answering a Future there is a
+        // runtime TypeError.
+        expect(output, contains(".thenReturn('')"));
+        expect(output, isNot(contains("getToken()).thenAnswer")));
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    test(
+        'mocks a notifier dependency from the registry by extending its real '
+        'base class and stubbing build() in setUp, instead of a bare Mock '
+        'that Riverpod cannot wire', () {
+      final registryGenerator = TestGenerator(
+        projectRoot: '.',
+        notifierIndex: const {
+          'UserNotifier':
+              'package:app/features/user/presentation/notifiers/user_notifier.dart',
+        },
+        notifierRegistry: const {
+          'UserNotifier': NotifierInfo(
+            className: 'UserNotifier',
+            sourceFilePath: '/tmp/user_notifier.dart',
+            importPath:
+                'package:app/features/user/presentation/notifiers/user_notifier.dart',
+            packageName: 'app',
+            stateType: 'UserState',
+            isAsync: true,
+            superclassSource: 'AsyncNotifier<UserState>',
+            repositories: [],
+            methods: [],
+            stateInfo: StateInfo(
+              className: 'UserState',
+              importPath:
+                  'package:app/features/user/presentation/states/user_state.dart',
+              fields: [],
+            ),
+          ),
+        },
+      );
+
+      const notifier = NotifierInfo(
+        className: 'CheckoutNotifier',
+        sourceFilePath: '/tmp/checkout_notifier.dart',
+        importPath:
+            'package:app/features/checkout/presentation/notifiers/checkout_notifier.dart',
+        packageName: 'app',
+        stateType: 'CheckoutState',
+        isAsync: true,
+        repositories: const [
+          RepositoryDep(
+            type: 'UserNotifier',
+            name: 'userNotifier',
+            // Captured from `await ref.read(userNotifierProvider.future)`.
+            providerExpression: 'userNotifierProvider.future',
+          ),
+        ],
+        buildMethod: null,
+        methods: const [
+          MethodInfo(
+            name: 'checkout',
+            returnType: 'Future<void>',
+            isAsync: true,
+            params: [],
+          ),
+        ],
+      );
+
+      final output = registryGenerator.generate(notifier);
+
+      // The mock keeps Riverpod's private wiring real by extending the real
+      // base class, mixing Mock in only for stubbing. (dart_style may wrap
+      // the clause across lines, so match the pieces individually.)
+      expect(
+          output, contains('class MockUserNotifier extends AsyncNotifier<UserState>'));
+      expect(output, contains('with Mock'));
+      expect(output, contains('implements UserNotifier {}'));
+      expect(output, isNot(contains('class MockUserNotifier extends Mock ')));
+
+      // Riverpod calls build() on the mock as soon as the provider is read
+      // (`.future` awaits it) — it must be stubbed or every test dies with
+      // MissingStubError.
+      expect(output, contains('mockUserNotifier.build()'));
+      expect(output, contains('UserState.empty()'));
+
+      // The state type appears in the mock's `extends` clause and the build
+      // stub, so its import is required.
+      expect(
+        output,
+        contains(
+            "import 'package:app/features/user/presentation/states/user_state.dart';"),
+      );
+    });
+
+    test(
+        'reads a family notifier with its argument everywhere: declaration, '
+        '.future initialisation, .notifier calls and state reads', () {
+      const notifier = NotifierInfo(
+        className: 'ChatNotifier',
+        sourceFilePath: '/tmp/chat_notifier.dart',
+        importPath:
+            'package:app/features/chat/presentation/notifiers/chat_notifier.dart',
+        packageName: 'app',
+        stateType: 'ChatState',
+        isAsync: true,
+        isFamily: true,
+        familyArgType: 'String',
+        superclassSource: 'FamilyAsyncNotifier<ChatState, String>',
+        repositories: const [],
+        buildMethod: null,
+        methods: const [
+          MethodInfo(
+            name: 'send',
+            returnType: 'Future<void>',
+            isAsync: true,
+            params: [],
+          ),
+        ],
+      );
+
+      final output = generator.generate(notifier);
+
+      expect(output, contains("const familyArg = '';"));
+      expect(output,
+          contains('await container.read(chatNotifierProvider(familyArg).future);'));
+      expect(
+        output,
+        contains('container.read(chatNotifierProvider(familyArg).notifier).send()'),
+      );
+      // A family provider read without its argument doesn't compile.
+      expect(output, isNot(contains('chatNotifierProvider.future')));
+      expect(output, isNot(contains('chatNotifierProvider.notifier')));
+    });
+
+    test(
+        'strips family call arguments from a captured dependency provider '
+        'expression and overrides the family factory', () {
+      const notifier = NotifierInfo(
+        className: 'ProfileNotifier',
+        sourceFilePath: '/tmp/profile_notifier.dart',
+        importPath:
+            'package:app/features/profile/presentation/notifiers/profile_notifier.dart',
+        packageName: 'app',
+        stateType: 'ProfileState',
+        isAsync: true,
+        repositories: const [
+          RepositoryDep(
+            type: 'Session',
+            name: 'session',
+            // Captured from `ref.read(sessionProvider(userId))` — `userId`
+            // only exists inside the notifier, not in the generated test.
+            providerExpression: 'sessionProvider(userId)',
+          ),
+        ],
+        buildMethod: null,
+        methods: const [
+          MethodInfo(
+            name: 'refresh',
+            returnType: 'Future<void>',
+            isAsync: true,
+            params: [],
+          ),
+        ],
+      );
+
+      final output = generator.generate(notifier);
+
+      // Family providers have no overrideWithValue; the captured call
+      // argument must not leak into the test.
+      expect(output,
+          contains('sessionProvider.overrideWith((ref, arg) => mockSession)'));
+      expect(output, isNot(contains('sessionProvider(userId)')));
+    });
+
+    test(
+        'hoists a stub shared by two or more methods to the end of setUp() '
+        'instead of repeating it in every success test', () {
+      final tempDir = Directory.systemTemp.createTempSync('mogen_test_');
+      try {
+        final file =
+            File('${tempDir.path}${Platform.pathSeparator}sync_notifier.dart');
+        file.writeAsStringSync('''
+class SyncNotifier extends AsyncNotifier<SyncState> {
+  Future<void> refreshA() async {
+    await ref.read(dataRepositoryProvider).sync();
+  }
+
+  Future<void> refreshB() async {
+    await ref.read(dataRepositoryProvider).sync();
+  }
+}
+''');
+
+        final notifier = NotifierInfo(
+          className: 'SyncNotifier',
+          sourceFilePath: file.path,
+          importPath:
+              'package:app/features/sync/presentation/notifiers/sync_notifier.dart',
+          packageName: 'app',
+          stateType: 'SyncState',
+          isAsync: true,
+          repositories: const [
+            RepositoryDep(
+              type: 'DataRepository',
+              name: 'dataRepository',
+              providerExpression: 'dataRepositoryProvider',
+            ),
+          ],
+          buildMethod: null,
+          methods: const [
+            MethodInfo(
+              name: 'refreshA',
+              returnType: 'Future<void>',
+              isAsync: true,
+              params: [],
+            ),
+            MethodInfo(
+              name: 'refreshB',
+              returnType: 'Future<void>',
+              isAsync: true,
+              params: [],
+            ),
+          ],
+        );
+
+        final output = generator.generate(notifier);
+
+        // The shared call is stubbed once in setUp()...
+        final setUpSection = output.substring(
+          output.indexOf('setUp('),
+          output.indexOf("group('refreshA'"),
+        );
+        expect(setUpSection, contains('mockDataRepository.sync('));
+
+        // ...and the success tests reference it instead of re-declaring it.
+        final successA = output.substring(
+          output.indexOf("test('refreshA completes successfully'"),
+          output.indexOf("test('refreshA shows an error"),
+        );
+        expect(successA, isNot(contains('when(() => mockDataRepository.sync(')));
+        expect(successA, contains('already stubbed in setUp()'));
+
+        // Error tests still re-stub it with thenThrow, or nothing would fail.
+        final errorA = output.substring(
+          output.indexOf("test('refreshA shows an error"),
+          output.indexOf("group('refreshB'"),
+        );
+        expect(errorA, contains('mockDataRepository.sync('));
+        expect(errorA, contains('thenThrow(AppException.test())'));
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    test(
+        'asserts state fields directly (no requireValue) for a synchronous '
+        'Notifier, whose provider exposes the state itself', () {
+      final tempDir = Directory.systemTemp.createTempSync('mogen_test_');
+      try {
+        final file = File(
+            '${tempDir.path}${Platform.pathSeparator}counter_notifier.dart');
+        file.writeAsStringSync('''
+class CounterNotifier extends Notifier<CounterState> {
+  void increment() {
+    ref.read(analyticsServiceProvider).track();
+    state = state.copyWith(success: 'incremented');
+  }
+}
+''');
+
+        final notifier = NotifierInfo(
+          className: 'CounterNotifier',
+          sourceFilePath: file.path,
+          importPath:
+              'package:app/features/counter/presentation/notifiers/counter_notifier.dart',
+          packageName: 'app',
+          stateType: 'CounterState',
+          isAsync: false,
+          repositories: const [
+            RepositoryDep(
+              type: 'AnalyticsService',
+              name: 'analyticsService',
+              providerExpression: 'analyticsServiceProvider',
+            ),
+          ],
+          buildMethod: null,
+          methods: const [
+            MethodInfo(
+              name: 'increment',
+              returnType: 'void',
+              isAsync: false,
+              params: [],
+            ),
+          ],
+          stateInfo: const StateInfo(
+            className: 'CounterState',
+            importPath:
+                'package:app/features/counter/presentation/states/counter_state.dart',
+            fields: [
+              StateField(name: 'error', type: 'String', isNullable: true),
+              StateField(name: 'success', type: 'String', isNullable: true),
+            ],
+          ),
+        );
+
+        final output = generator.generate(notifier);
+
+        // `container.read(provider)` on a plain Notifier returns the state
+        // directly — `.requireValue` only exists on AsyncValue.
+        expect(output, contains('expect(finalState.error, isNull);'));
+        expect(output, contains('expect(finalState.success, isNotNull);'));
+        expect(output, isNot(contains('requireValue')));
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    test(
+        'skips the success-message assertion when the method body provably '
+        'never sets one', () {
+      const notifier = NotifierInfo(
+        className: 'ToggleNotifier',
+        sourceFilePath: '/tmp/toggle_notifier.dart',
+        importPath:
+            'package:app/features/toggle/presentation/notifiers/toggle_notifier.dart',
+        packageName: 'app',
+        stateType: 'ToggleState',
+        isAsync: true,
+        repositories: const [],
+        buildMethod: null,
+        methods: const [
+          MethodInfo(
+            name: 'toggle',
+            returnType: 'void',
+            isAsync: false,
+            params: [],
+            // The parsed body never mentions the state's `success` field —
+            // asserting isNotNull would be guaranteed to fail.
+            bodySource:
+                '{ state = AsyncData(state.requireValue.copyWith(enabled: true)); }',
+          ),
+        ],
+        stateInfo: StateInfo(
+          className: 'ToggleState',
+          importPath:
+              'package:app/features/toggle/presentation/states/toggle_state.dart',
+          fields: const [
+            StateField(name: 'error', type: 'String', isNullable: true),
+            StateField(name: 'success', type: 'String', isNullable: true),
+          ],
+        ),
+      );
+
+      final output = generator.generate(notifier);
+
+      expect(output, contains('expect(finalState.requireValue.error, isNull);'));
+      expect(
+        output,
+        isNot(contains('expect(finalState.requireValue.success, isNotNull);')),
+      );
     });
   });
 }

@@ -65,8 +65,8 @@ class MockValueGenerator {
     final nullable = rawType.trim().endsWith('?');
     final type = rawType.replaceAll('?', '').trim();
 
-    // Unwrap Future<T> to operate on the inner type.
-    final inner = type.startsWith('Future<') ? _generic(type) : type;
+    // Unwrap Future<T>/FutureOr<T> to operate on the inner type.
+    final inner = _isFutureWrapped(type) ? _generic(type) : type;
     final innerNullable = inner.trim().endsWith('?');
     final innerClean = inner.replaceAll('?', '').trim();
 
@@ -129,8 +129,8 @@ class MockValueGenerator {
 
     final type = rawType.replaceAll('?', '').trim();
 
-    // Unwrap Future<T>
-    final inner = type.startsWith('Future<') ? _generic(type) : type;
+    // Unwrap Future<T>/FutureOr<T>
+    final inner = _isFutureWrapped(type) ? _generic(type) : type;
     final innerNullable = inner.trim().endsWith('?');
     if (innerNullable) return null;
 
@@ -149,6 +149,11 @@ class MockValueGenerator {
 
     return candidateClean;
   }
+
+  /// Whether [type] is a `Future<T>`/`FutureOr<T>` wrapper whose inner type
+  /// carries the actual stub value.
+  static bool _isFutureWrapped(String type) =>
+      type.startsWith('Future<') || type.startsWith('FutureOr<');
 
   static String _generic(String type) {
     final s = type.indexOf('<') + 1;

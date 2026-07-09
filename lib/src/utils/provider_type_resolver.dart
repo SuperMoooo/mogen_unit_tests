@@ -36,4 +36,31 @@ class ProviderTypeResolver {
     if (normalized.isEmpty) return normalized;
     return normalized[0].toUpperCase() + normalized.substring(1);
   }
+
+  /// Extracts the camelCase prefix of the provider identifier at the start
+  /// of a full provider *expression* — tolerating `.notifier`/`.future`
+  /// accessors and family call arguments alike:
+  ///
+  ///   `authRepositoryProvider`          → `authRepository`
+  ///   `userNotifierProvider.notifier`   → `userNotifier`
+  ///   `userNotifierProvider.future`     → `userNotifier`
+  ///   `chatProvider(roomId).notifier`   → `chat`
+  ///
+  /// Returns `null` when the expression doesn't start with a
+  /// `...Provider`-named identifier.
+  static String? providerPrefix(String providerExpression) {
+    final match = RegExp(r'^([a-z_][a-zA-Z0-9_]*)Provider\b')
+        .firstMatch(providerExpression.trim());
+    return match?.group(1);
+  }
+
+  /// Resolves the dependency type implied by a full provider expression, or
+  /// `null` when the expression doesn't look like a provider read. This is
+  /// [providerPrefix] + [resolve] in one step, shared by the notifier parser
+  /// and the method-call detector so they can never disagree.
+  static String? typeFromProviderExpression(String providerExpression) {
+    final prefix = providerPrefix(providerExpression);
+    if (prefix == null) return null;
+    return resolve(prefix);
+  }
 }

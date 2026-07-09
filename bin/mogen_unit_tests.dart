@@ -8,7 +8,7 @@ import 'package:mogen_unit_tests/mogen_unit_tests.dart';
 import 'package:path/path.dart' as p;
 import 'package:yaml/yaml.dart';
 
-const _version = '1.1.4';
+const _version = '1.2.0';
 
 Future<void> main(List<String> arguments) async {
   final parser = ArgParser()
@@ -45,6 +45,12 @@ Future<void> main(List<String> arguments) async {
       'feature',
       abbr: 'f',
       help: 'Only generate tests for the given feature name.',
+    )
+    ..addFlag(
+      'force',
+      negatable: false,
+      help: 'Overwrite existing test files even when they look '
+          'hand-maintained (missing the generated-file marker).',
     );
 
   late final ArgResults args;
@@ -100,6 +106,7 @@ Future<void> main(List<String> arguments) async {
 
   final dryRun = args['dry-run'] as bool;
   final verbose = args['verbose'] as bool;
+  final force = args['force'] as bool;
   final feature = args['feature'] as String?;
 
   _printBanner();
@@ -107,8 +114,9 @@ Future<void> main(List<String> arguments) async {
   print('Root     : $root');
   print('Features : ${featuresDir.path}');
   if (feature != null && feature.isNotEmpty) print('Feature  : $feature');
-  print('Output   : ${p.join(root, 'test', 'features')}');
+  print('Output   : ${p.join(root, 'test', 'unit', 'features')}');
   if (dryRun) print('Mode     : dry-run (no files will be written)');
+  if (force) print('Mode     : force (hand-maintained files are overwritten)');
   print('');
 
   final orchestrator = TestOrchestrator(
@@ -116,6 +124,7 @@ Future<void> main(List<String> arguments) async {
     packageName: packageName,
     dryRun: dryRun,
     verbose: verbose,
+    force: force,
     feature: feature,
   );
 
@@ -162,7 +171,7 @@ void _printBanner() {
 ╔══════════════════════════════════════════════╗
 ║         mogen_unit_tests  v$_version          ║
 ║   Auto-generate Mocktail unit tests for      ║
-║   Riverpod AsyncNotifier classes             ║
+║   Riverpod notifier classes                  ║
 ╚══════════════════════════════════════════════╝
 ''');
 }

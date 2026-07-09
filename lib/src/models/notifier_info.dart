@@ -10,6 +10,9 @@ class NotifierInfo {
     required this.packageName,
     this.stateType,
     required this.isAsync,
+    this.isFamily = false,
+    this.familyArgType,
+    this.superclassSource,
     required this.repositories,
     this.buildMethod,
     required this.methods,
@@ -35,6 +38,25 @@ class NotifierInfo {
   /// Whether the notifier extends `AsyncNotifier`.
   final bool isAsync;
 
+  /// Whether the notifier is a `family` notifier
+  /// (`FamilyAsyncNotifier`/`FamilyNotifier` and their `AutoDispose`
+  /// variants). Family providers must be read with an argument:
+  /// `provider(arg)`.
+  final bool isFamily;
+
+  /// The family argument type (the second generic of
+  /// `FamilyAsyncNotifier<State, Arg>`), when [isFamily] is `true`.
+  final String? familyArgType;
+
+  /// The full superclass source as written, e.g. `AsyncNotifier<CartState>`.
+  ///
+  /// Needed to generate a mock class that *extends the real base class*
+  /// (`class MockX extends AsyncNotifier<S> with Mock implements X {}`) when
+  /// this notifier is a dependency of another notifier — a plain
+  /// `extends Mock implements X` cannot satisfy Riverpod's library-private
+  /// wiring and fails at runtime.
+  final String? superclassSource;
+
   /// Repository or service dependencies found in the notifier body.
   final List<RepositoryDep> repositories;
 
@@ -54,6 +76,24 @@ class NotifierInfo {
   /// `domain/repositories` folder convention, by reusing an import the
   /// source file already declares.
   final List<String> sourceImports;
+
+  /// Returns a copy of this notifier with [stateInfo] attached.
+  NotifierInfo withStateInfo(StateInfo? stateInfo) => NotifierInfo(
+        className: className,
+        sourceFilePath: sourceFilePath,
+        importPath: importPath,
+        packageName: packageName,
+        stateType: stateType,
+        isAsync: isAsync,
+        isFamily: isFamily,
+        familyArgType: familyArgType,
+        superclassSource: superclassSource,
+        repositories: repositories,
+        buildMethod: buildMethod,
+        methods: methods,
+        stateInfo: stateInfo,
+        sourceImports: sourceImports,
+      );
 }
 
 /// A repository or service dependency detected inside the notifier.
@@ -84,6 +124,7 @@ class MethodInfo {
     required this.isAsync,
     required this.params,
     this.isBuild = false,
+    this.bodySource,
   });
 
   /// The method name, for example `loadCart`.
@@ -100,6 +141,13 @@ class MethodInfo {
 
   /// `true` when this metadata describes the `build` method.
   final bool isBuild;
+
+  /// The raw source of the method body, when the parser captured it.
+  ///
+  /// Used for lightweight heuristics (e.g. only asserting the state's
+  /// `success` field when the method body actually mentions it). `null`
+  /// means "unknown" — heuristics should then give the benefit of the doubt.
+  final String? bodySource;
 }
 
 /// A single method or constructor parameter.

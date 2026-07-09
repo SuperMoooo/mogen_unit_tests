@@ -38,17 +38,23 @@
 ///
 ///   Future<void> addItem(CartItem item) async {
 ///     await ref.read(cartRepositoryProvider).addItem(item);
+///     state = AsyncData(state.requireValue.copyWith(success: 'added'));
 ///   }
 ///
 ///   Future<void> removeItem(String itemId) async {
 ///     await ref.read(cartRepositoryProvider).removeItem(itemId);
+///     state = AsyncData(state.requireValue.copyWith(success: 'removed'));
 ///   }
 /// }
 /// ```
 ///
-/// `CartRepository.fetchCart()` returns a `Future<CartEntity>`, and
-/// `CartState` exposes `isLoadingAction`/`error`/`success` fields — the
-/// generator recognizes both conventions and reflects them below.
+/// `CartRepository.fetchCart()` returns a `Future<CartEntity>`, `addItem`
+/// takes a custom `CartItem` (so mocktail needs a fallback value registered
+/// for `any()` to work), and `CartState` exposes
+/// `isLoadingAction`/`error`/`success` fields — the generator recognizes all
+/// of these conventions and reflects them below. `fetchCart()` is called by
+/// `build()`, so it is stubbed once in `setUp` and the error tests re-stub
+/// it with `thenThrow` after initialising the notifier.
 ///
 /// ## Example output — cart_notifier_test.dart
 ///
@@ -65,6 +71,7 @@
 /// import 'package:my_app/features/cart/domain/repositories/cart_repository.dart';
 /// import 'package:my_app/features/cart/data/repositories/cart_repository_impl.dart';
 /// import 'package:my_app/features/cart/domain/entities/cart_entity.dart';
+/// import 'package:my_app/features/cart/domain/entities/cart_item.dart';
 ///
 /// // ── Mocks ────────────────────────────────────────────────────
 /// class MockCartRepository extends Mock implements CartRepository {}
@@ -76,6 +83,12 @@
 ///     late MockCartRepository mockCartRepository;
 ///     late ProviderContainer container;
 ///
+///     setUpAll(() {
+///       // Mocktail needs a fallback instance registered for every
+///       // non-nullable custom type used with an any()/captureAny() matcher.
+///       registerFallbackValue(CartItem.empty());
+///     });
+///
 ///     setUp(() {
 ///       mockCartRepository = MockCartRepository();
 ///
@@ -86,7 +99,8 @@
 ///         ],
 ///       );
 ///
-///       // Arrange: stub dependencies used by build()
+///       // Arrange: stub dependencies used by build() and calls shared
+///       // by multiple methods — once here instead of in every test.
 ///       when(
 ///         () => mockCartRepository.fetchCart(),
 ///       ).thenAnswer((_) async => CartEntity.empty());
@@ -121,16 +135,17 @@
 ///       });
 ///
 ///       test('addItem shows an error when the repository fails', () async {
-///         // Arrange: stub repositories
-///         when(
-///           () => mockCartRepository.addItem(any()),
-///         ).thenThrow(AppException.test());
-///
 ///         // Arrange: inputs
 ///         final item = CartItem.empty();
 ///
 ///         // Ensure notifier is initialised
 ///         await container.read(cartNotifierProvider.future);
+///
+///         // Arrange: make every dependency call this method performs fail.
+///         // Re-stubbing overrides the success stubs from setUp().
+///         when(
+///           () => mockCartRepository.addItem(any()),
+///         ).thenThrow(AppException.test());
 ///
 ///         // Act
 ///         await container.read(cartNotifierProvider.notifier).addItem(item);
@@ -158,9 +173,7 @@
 ///         await container.read(cartNotifierProvider.future);
 ///
 ///         // Act
-///         await container
-///             .read(cartNotifierProvider.notifier)
-///             .removeItem(itemId);
+///         await container.read(cartNotifierProvider.notifier).removeItem(itemId);
 ///
 ///         // Assert
 ///         final finalState = container.read(cartNotifierProvider);
@@ -170,21 +183,20 @@
 ///       });
 ///
 ///       test('removeItem shows an error when the repository fails', () async {
-///         // Arrange: stub repositories
-///         when(
-///           () => mockCartRepository.removeItem(any()),
-///         ).thenThrow(AppException.test());
-///
 ///         // Arrange: inputs
 ///         const itemId = '';
 ///
 ///         // Ensure notifier is initialised
 ///         await container.read(cartNotifierProvider.future);
 ///
+///         // Arrange: make every dependency call this method performs fail.
+///         // Re-stubbing overrides the success stubs from setUp().
+///         when(
+///           () => mockCartRepository.removeItem(any()),
+///         ).thenThrow(AppException.test());
+///
 ///         // Act
-///         await container
-///             .read(cartNotifierProvider.notifier)
-///             .removeItem(itemId);
+///         await container.read(cartNotifierProvider.notifier).removeItem(itemId);
 ///
 ///         // Assert
 ///         final finalState = container.read(cartNotifierProvider);

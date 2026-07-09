@@ -71,19 +71,36 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
   final List<String> sourceImports;
   final List<NotifierInfo> notifiers = [];
 
+  /// The exact Riverpod base classes this generator supports. Matching the
+  /// base name exactly (instead of `contains('Notifier')`) keeps classes
+  /// extending `ChangeNotifier`/`ValueNotifier` — which can legitimately
+  /// live under `presentation/notifiers/` — from being scaffolded as
+  /// Riverpod notifiers.
+  static const _riverpodBases = {
+    'Notifier',
+    'AsyncNotifier',
+    'AutoDisposeNotifier',
+    'AutoDisposeAsyncNotifier',
+    'FamilyNotifier',
+    'FamilyAsyncNotifier',
+    'AutoDisposeFamilyNotifier',
+    'AutoDisposeFamilyAsyncNotifier',
+  };
+
   @override
   void visitClassDeclaration(ClassDeclaration node) {
-    final superclassName = node.extendsClause?.superclass.toSource() ?? '';
+    final superclassSource = node.extendsClause?.superclass.toSource() ?? '';
+    final baseName = superclassSource.split('<').first.trim();
 
-    final isAsync = superclassName.contains('AsyncNotifier') ||
-        superclassName.contains('AutoDisposeAsyncNotifier');
-    final isNotifier = isAsync ||
-        superclassName.contains('Notifier') ||
-        superclassName.contains('AutoDisposeNotifier');
+    if (!_riverpodBases.contains(baseName)) return;
 
-    if (!isNotifier) return;
+    final isAsync = baseName.contains('AsyncNotifier');
+    final isFamily = baseName.contains('Family');
 
-    final stateType = _extractGeneric(superclassName);
+    final generics = _extractGenerics(superclassSource);
+    final stateType = generics.isNotEmpty ? generics.first : null;
+    final familyArgType =
+        isFamily && generics.length > 1 ? generics[1] : null;
 
     final repoVisitor = _RepoRefVisitor();
     node.visitChildren(repoVisitor);
@@ -102,8 +119,19 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
     for (final member in body.members) {
       if (member is! MethodDeclaration) continue;
 
+      // Getters, setters, statics and operators aren't callable the way the
+      // generated `notifier.method(args)` scaffold expects — a getter would
+      // be emitted as `.isReady()` and fail to compile.
+      if (member.isGetter ||
+          member.isSetter ||
+          member.isStatic ||
+          member.isOperator) {
+        continue;
+      }
+
       final memberName = member.name.lexeme;
       if (memberName.startsWith('_')) continue;
+      if (memberName == 'toString' || memberName == 'noSuchMethod') continue;
 
       final info = MethodInfo(
         name: memberName,
@@ -111,6 +139,7 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
         isAsync: _isAsync(member),
         params: _parseParams(member.parameters),
         isBuild: memberName == 'build',
+        bodySource: member.body.toSource(),
       );
 
       if (memberName == 'build') {
@@ -127,6 +156,9 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
       packageName: packageName, // ← ADDED
       stateType: stateType,
       isAsync: isAsync,
+      isFamily: isFamily,
+      familyArgType: familyArgType,
+      superclassSource: superclassSource,
       repositories: repos,
       buildMethod: buildMethod,
       methods: methods,
@@ -155,11 +187,18 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
 
   bool _looksLikeRepo(String type) {
     final lower = type.toLowerCase();
+    // Kept in sync with the generator's mockable-name heuristic — a
+    // field-declared notifier/cubit dependency is just as mockable as a
+    // repository one.
     return lower.contains('repository') ||
         lower.contains('service') ||
         lower.contains('datasource') ||
         lower.contains('client') ||
-        lower.contains('api');
+        lower.contains('api') ||
+        lower.endsWith('notifier') ||
+        lower.endsWith('cubit') ||
+        lower.endsWith('bloc') ||
+        lower.endsWith('viewmodel');
   }
 
   List<ParamInfo> _parseParams(FormalParameterList? list) {
@@ -245,8 +284,29 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
     return false;
   }
 
-  String? _extractGeneric(String type) =>
-      RegExp(r'<(.+)>').firstMatch(type)?.group(1);
+  /// Splits the generic arguments of [type] at top level, respecting nested
+  /// generics: `FamilyAsyncNotifier<CartState, List<int>>` →
+  /// `['CartState', 'List<int>']`.
+  List<String> _extractGenerics(String type) {
+    final raw = RegExp(r'<(.+)>').firstMatch(type)?.group(1);
+    if (raw == null) return const [];
+
+    final parts = <String>[];
+    var depth = 0;
+    final current = StringBuffer();
+    for (final char in raw.split('')) {
+      if (char == '<') depth++;
+      if (char == '>') depth--;
+      if (char == ',' && depth == 0) {
+        parts.add(current.toString().trim());
+        current.clear();
+      } else {
+        current.write(char);
+      }
+    }
+    if (current.isNotEmpty) parts.add(current.toString().trim());
+    return parts.where((p) => p.isNotEmpty).toList();
+  }
 }
 
 // ─── Repo ref.read() Visitor ─────────────────────────────────────────────────
@@ -279,12 +339,8 @@ class _RepoRefVisitor extends RecursiveAstVisitor<void> {
     ));
   }
 
-  String? _providerToType(String providerExpr) {
-    final cleaned = providerExpr.replaceAll(RegExp(r'\.notifier\b'), '').trim();
-    final match = RegExp(r'^([a-z][a-zA-Z0-9]*)Provider').firstMatch(cleaned);
-    if (match == null) return null;
-    return ProviderTypeResolver.resolve(match.group(1)!);
-  }
+  String? _providerToType(String providerExpr) =>
+      ProviderTypeResolver.typeFromProviderExpression(providerExpr);
 
   String _typeToFieldName(String type) =>
       type[0].toLowerCase() + type.substring(1);
