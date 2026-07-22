@@ -158,6 +158,7 @@ class TestGenerator {
           n.sourceFilePath,
           repo.type,
           methodName: name,
+          fieldName: repo.name,
         );
       }
       callsByMethod[name] = perDep;

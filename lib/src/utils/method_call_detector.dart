@@ -47,15 +47,25 @@ class MethodCallDetector {
   /// Parse the notifier source file and extract method calls to a specific repository.
   ///
   /// If [methodName] is provided, only calls inside that notifier method are returned.
+  ///
+  /// [fieldName] is the actual declared field name for this dependency (as
+  /// recorded by [NotifierParser]'s field scan), e.g. `_habitRepo` for a
+  /// `HabitRepository _habitRepo` field. Passing it lets calls through
+  /// descriptively-named fields be matched exactly, instead of relying on
+  /// [ProviderTypeResolver]'s naive camelCase guess — which only works when
+  /// the field is literally named after its type (`habitRepository`) and
+  /// misses abbreviations, which are unavoidable once a notifier depends on
+  /// more than one repository and `_repo` no longer disambiguates them.
   static List<RepositoryMethodCall> detectRepositoryMethodCalls(
     String notifierSourcePath,
     String repoType, {
     String? methodName,
+    String? fieldName,
   }) {
     try {
       final content = File(notifierSourcePath).readAsStringSync();
       final parsed = parseString(content: content, path: notifierSourcePath);
-      final visitor = _MethodCallVisitor(repoType, methodName);
+      final visitor = _MethodCallVisitor(repoType, methodName, fieldName);
       parsed.unit.visitChildren(visitor);
       return visitor.methodCalls.values.toList();
     } catch (_) {
@@ -156,10 +166,11 @@ class _SignatureVisitor extends RecursiveAstVisitor<void> {
 // ─── Method-call visitor ─────────────────────────────────────────────────────
 
 class _MethodCallVisitor extends RecursiveAstVisitor<void> {
-  _MethodCallVisitor(this.repoType, this.methodName);
+  _MethodCallVisitor(this.repoType, this.methodName, this.fieldName);
 
   final String repoType;
   final String? methodName;
+  final String? fieldName;
   final Map<String, RepositoryMethodCall> methodCalls = {};
 
   @override
@@ -202,6 +213,7 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
           varName == 'repo' ||
           varName == '_repository' ||
           varName == 'repository' ||
+          varName == fieldName ||
           ProviderTypeResolver.resolve(varName) == repoType;
     }
 
@@ -267,7 +279,8 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
     final typeName = ProviderTypeResolver.resolve(varName);
     return typeName == repoType ||
         varName == _lcFirst(repoType) ||
-        varName == '_${_lcFirst(repoType)}';
+        varName == '_${_lcFirst(repoType)}' ||
+        varName == fieldName;
   }
 
   String _lcFirst(String s) =>

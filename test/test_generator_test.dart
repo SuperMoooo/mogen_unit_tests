@@ -1345,6 +1345,63 @@ class AuthNotifier {
     });
 
     test(
+        'detects a call through an abbreviated field name that does not '
+        'naively capitalize back to its type — unavoidable once a notifier '
+        'depends on more than one repository and _repo no longer '
+        'disambiguates them', () {
+      final tempDir = Directory.systemTemp.createTempSync('mogen_test_');
+      try {
+        final file = File(
+            '${tempDir.path}${Platform.pathSeparator}habits_notifier.dart');
+        file.writeAsStringSync('''
+class HabitsNotifier extends AsyncNotifier<HabitsState> {
+  final HabitRepository _habitRepo;
+
+  HabitsNotifier(this._habitRepo);
+
+  @override
+  Future<HabitsState> build() async => HabitsState.empty();
+
+  Future<void> checkHabit({required int habitId}) async {
+    await _habitRepo.checkHabitToday(habitId: habitId);
+  }
+}
+''');
+
+        final notifier = NotifierInfo(
+          className: 'HabitsNotifier',
+          sourceFilePath: file.path,
+          importPath:
+              'package:app/features/habits/presentation/notifiers/habits_notifier.dart',
+          packageName: 'app',
+          stateType: 'HabitsState',
+          isAsync: true,
+          repositories: const [
+            RepositoryDep(type: 'HabitRepository', name: '_habitRepo'),
+          ],
+          buildMethod: null,
+          methods: const [
+            MethodInfo(
+              name: 'checkHabit',
+              returnType: 'Future<void>',
+              isAsync: true,
+              params: [
+                ParamInfo(name: 'habitId', type: 'int', isNamed: true),
+              ],
+            ),
+          ],
+        );
+
+        final output = generator.generate(notifier);
+
+        expect(output, contains('mockHabitRepository.checkHabitToday'));
+        expect(output, isNot(contains('No mocks needed for HabitRepository')));
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    test(
         'does not stub a method on dependencies that method never actually '
         'calls, even when several dependencies share the same method name '
         'across different notifier methods', () {
