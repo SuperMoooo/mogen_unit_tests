@@ -152,14 +152,45 @@ class _SignatureVisitor extends RecursiveAstVisitor<void> {
   List<String> _paramTypes(FormalParameterList? list) {
     if (list == null) return const [];
     final types = <String>[];
-    for (var param in list.parameters) {
-      if (param is DefaultFormalParameter) param = param.parameter;
-      if (param is SimpleFormalParameter) {
-        final type = param.type?.toSource();
-        if (type != null) types.add(type);
-      }
+    for (final param in list.parameters) {
+      final type = _declaredType(param);
+      if (type != null) types.add(type.toSource());
     }
     return types;
+  }
+
+  /// Returns the explicit type annotation of [param], or `null` when the
+  /// parameter declares none (`this.value`, `super.value`, bare `value`).
+  ///
+  /// This walks the AST for the first [TypeAnnotation] rather than matching on
+  /// concrete parameter node classes: analyzer 13 folded the parameter class
+  /// hierarchy together, so `SimpleFormalParameter` and friends only exist on
+  /// older versions, while [TypeAnnotation] is stable across all of them.
+  TypeAnnotation? _declaredType(FormalParameter param) {
+    // Old-style function-typed parameters (`void cb(int x)`) lead with their
+    // *return* type, which is not the parameter's type — skip them, as the
+    // previous class-based implementation did.
+    if (param.name?.next?.lexeme == '(') return null;
+
+    final finder = _TypeAnnotationFinder();
+    param.visitChildren(finder);
+    return finder.type;
+  }
+}
+
+/// Captures the first [TypeAnnotation] reachable from a node, in source order.
+class _TypeAnnotationFinder extends GeneralizingAstVisitor<void> {
+  TypeAnnotation? type;
+
+  @override
+  void visitNode(AstNode node) {
+    if (type != null) return;
+    if (node is TypeAnnotation) {
+      // Stop here so the outermost annotation wins over its type arguments.
+      type = node;
+      return;
+    }
+    super.visitNode(node);
   }
 }
 
@@ -197,7 +228,7 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
         callName,
         () => RepositoryMethodCall(
           methodName: callName,
-          argumentMatchers: _buildArgumentMatchers(node.argumentList.arguments),
+          argumentMatchers: _buildArgumentMatchers(node.argumentList),
         ),
       );
     }
@@ -288,12 +319,26 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
 
   /// Builds argument matchers, emitting `any(named: 'x')` for named arguments
   /// and `any()` for positional ones.
-  List<String> _buildArgumentMatchers(NodeList<Expression> arguments) {
-    return arguments.map((arg) {
-      if (arg is NamedExpression) {
-        return "${arg.name.label.name}: any(named: '${arg.name.label.name}')";
-      }
-      return 'any()';
+  ///
+  /// Takes the [ArgumentList] rather than its `arguments` because the element
+  /// type of that list changed from `Expression` to `Argument` in analyzer 13.
+  List<String> _buildArgumentMatchers(ArgumentList argumentList) {
+    return argumentList.arguments.map((arg) {
+      final label = _namedArgumentLabel(arg);
+      return label == null ? 'any()' : "$label: any(named: '$label')";
     }).toList();
+  }
+
+  /// Returns the label of a named argument (`retries: 3` -> `retries`), or
+  /// `null` when the argument is positional.
+  ///
+  /// Read off the token stream instead of the node type: analyzer 13 replaced
+  /// `NamedExpression` with `NamedArgument` and reshaped `Label` to hold a
+  /// token, so neither can be named in source that also builds on analyzer 10.
+  /// Within an argument list, `identifier :` is unambiguously a named argument
+  /// — a positional conditional such as `a ? b : c` leads with `?`.
+  String? _namedArgumentLabel(AstNode arg) {
+    final first = arg.beginToken;
+    return first.next?.lexeme == ':' ? first.lexeme : null;
   }
 }

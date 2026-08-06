@@ -1,5 +1,5 @@
-# [1.2.1]
+# [1.2.2]
 
 ## Fix
 
-- multi repos in 1 notifier
+- bug fixes
