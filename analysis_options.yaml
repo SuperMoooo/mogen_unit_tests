@@ -7,3 +7,6 @@ linter:
         prefer_const_declarations: true
         # Avoid print statements in production code.
         avoid_print: true
+        # Keep generic types in doc comments backticked so pub.dev's dartdoc
+        # does not swallow them as HTML tags.
+        unintended_html_in_doc_comment: true

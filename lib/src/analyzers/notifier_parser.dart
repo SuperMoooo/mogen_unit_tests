@@ -99,8 +99,7 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
 
     final generics = _extractGenerics(superclassSource);
     final stateType = generics.isNotEmpty ? generics.first : null;
-    final familyArgType =
-        isFamily && generics.length > 1 ? generics[1] : null;
+    final familyArgType = isFamily && generics.length > 1 ? generics[1] : null;
 
     final repoVisitor = _RepoRefVisitor();
     node.visitChildren(repoVisitor);

@@ -9,8 +9,8 @@ void main() {
         () {
       final tempDir = Directory.systemTemp.createTempSync('mogen_parser_');
       try {
-        final file = File(
-            '${tempDir.path}${Platform.pathSeparator}auth_notifier.dart');
+        final file =
+            File('${tempDir.path}${Platform.pathSeparator}auth_notifier.dart');
         file.writeAsStringSync('''
 class AuthNotifier extends AsyncNotifier<AuthState> {
   @override
@@ -100,7 +100,8 @@ class SelectionHolder extends ValueNotifier<int> {
       }
     });
 
-    test('skips getters, setters and static members — only real callable '
+    test(
+        'skips getters, setters and static members — only real callable '
         'methods get test scaffolding', () {
       final tempDir = Directory.systemTemp.createTempSync('mogen_parser_');
       try {

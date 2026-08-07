@@ -263,16 +263,14 @@ class FormNotifier extends AsyncNotifier<FormState> {
         final output = generator.generate(notifier);
 
         // Success path should clear the error and surface the success message.
-        expect(output,
-            contains('expect(finalState.requireValue.error, isNull);'));
+        expect(
+            output, contains('expect(finalState.requireValue.error, isNull);'));
         expect(output,
             contains('expect(finalState.requireValue.success, isNotNull);'));
 
         // Error path should surface the error and clear any success message.
-        expect(
-            output,
-            contains(
-                "test('submit shows an error when the repository fails'"));
+        expect(output,
+            contains("test('submit shows an error when the repository fails'"));
         expect(output,
             contains('expect(finalState.requireValue.error, isNotNull);'));
         expect(output,
@@ -645,11 +643,12 @@ class AuthNotifier {
 
       // No dependencies → nothing can throw → an error test asserting a
       // non-null error would be guaranteed to fail.
-      expect(output, isNot(contains('shows an error when the repository fails')));
+      expect(
+          output, isNot(contains('shows an error when the repository fails')));
       expect(output, contains('No error-path test'));
       // The success test is still generated.
-      expect(output,
-          contains("test('doSomethingRisky completes successfully'"));
+      expect(
+          output, contains("test('doSomethingRisky completes successfully'"));
     });
 
     test('throws in the error-path scaffold when a repository call exists', () {
@@ -875,10 +874,8 @@ class AuthNotifier {
 
       // Reached via ref.read(...) — that's the DI seam, so it must be mocked
       // regardless of its type name not looking like a repository/service.
-      expect(
-          output, contains('class MockFlutterSecureStorage extends Mock'));
-      expect(
-          output, contains('secureStorageProvider.overrideWithValue'));
+      expect(output, contains('class MockFlutterSecureStorage extends Mock'));
+      expect(output, contains('secureStorageProvider.overrideWithValue'));
 
       // The import location can't be resolved from a bare NotifierInfo (no
       // source imports, no index entry), so a visible TODO should be emitted
@@ -1002,7 +999,8 @@ class CounterNotifier extends Notifier<CounterState> {
       }
     });
 
-    test('uses .empty() instead of an undefined Fake class for custom-type '
+    test(
+        'uses .empty() instead of an undefined Fake class for custom-type '
         'method parameters', () {
       const notifier = NotifierInfo(
         className: 'CartNotifier',
@@ -1102,7 +1100,8 @@ class CounterNotifier extends Notifier<CounterState> {
       // The provider name heuristic would naively guess `Router`, which
       // isn't a concrete, mockable navigation type — these apps always
       // store a `GoRouter` behind `routerProvider`.
-      expect(output, contains('class MockGoRouter extends Mock implements GoRouter {}'));
+      expect(output,
+          contains('class MockGoRouter extends Mock implements GoRouter {}'));
       expect(
         output,
         contains("import 'package:go_router/go_router.dart';"),
@@ -1208,7 +1207,8 @@ class CounterNotifier extends Notifier<CounterState> {
       );
       expect(
         output,
-        isNot(contains('features/auth/domain/repositories/user_repository.dart')),
+        isNot(
+            contains('features/auth/domain/repositories/user_repository.dart')),
       );
     });
 
@@ -1592,7 +1592,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
           output.indexOf('setUp('),
           output.indexOf("group('login'"),
         );
-        expect(setUpSection, contains('// Arrange: stub dependencies used by build()'));
+        expect(setUpSection,
+            contains('// Arrange: stub dependencies used by build()'));
         expect(setUpSection, contains('mockGoRouter.push('));
         expect(setUpSection, contains('mockUserNotifier.refreshProfile('));
         expect(setUpSection, contains('mockUserRepository.syncSession('));
@@ -1635,8 +1636,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         // including the build()-shared one — with thenThrow, and only after
         // the notifier has been initialised (so build() itself still
         // succeeds).
-        final errorTest =
-            loginSection.substring(loginSection.indexOf("test('login shows an error"));
+        final errorTest = loginSection
+            .substring(loginSection.indexOf("test('login shows an error"));
         expect(errorTest, contains('mockGoRouter.push('));
         expect(errorTest, contains('mockAuthRepository.login('));
         expect(errorTest, contains('thenThrow(AppException.test())'));
@@ -1809,8 +1810,8 @@ class CartNotifier extends AsyncNotifier<CartState> {
       // The mock keeps Riverpod's private wiring real by extending the real
       // base class, mixing Mock in only for stubbing. (dart_style may wrap
       // the clause across lines, so match the pieces individually.)
-      expect(
-          output, contains('class MockUserNotifier extends AsyncNotifier<UserState>'));
+      expect(output,
+          contains('class MockUserNotifier extends AsyncNotifier<UserState>'));
       expect(output, contains('with Mock'));
       expect(output, contains('implements UserNotifier {}'));
       expect(output, isNot(contains('class MockUserNotifier extends Mock ')));
@@ -1859,11 +1860,14 @@ class CartNotifier extends AsyncNotifier<CartState> {
       final output = generator.generate(notifier);
 
       expect(output, contains("const familyArg = '';"));
-      expect(output,
-          contains('await container.read(chatNotifierProvider(familyArg).future);'));
+      expect(
+          output,
+          contains(
+              'await container.read(chatNotifierProvider(familyArg).future);'));
       expect(
         output,
-        contains('container.read(chatNotifierProvider(familyArg).notifier).send()'),
+        contains(
+            'container.read(chatNotifierProvider(familyArg).notifier).send()'),
       );
       // A family provider read without its argument doesn't compile.
       expect(output, isNot(contains('chatNotifierProvider.future')));
@@ -1975,7 +1979,8 @@ class SyncNotifier extends AsyncNotifier<SyncState> {
           output.indexOf("test('refreshA completes successfully'"),
           output.indexOf("test('refreshA shows an error"),
         );
-        expect(successA, isNot(contains('when(() => mockDataRepository.sync(')));
+        expect(
+            successA, isNot(contains('when(() => mockDataRepository.sync(')));
         expect(successA, contains('already stubbed in setUp()'));
 
         // Error tests still re-stub it with thenThrow, or nothing would fail.
@@ -2091,7 +2096,8 @@ class CounterNotifier extends Notifier<CounterState> {
 
       final output = generator.generate(notifier);
 
-      expect(output, contains('expect(finalState.requireValue.error, isNull);'));
+      expect(
+          output, contains('expect(finalState.requireValue.error, isNull);'));
       expect(
         output,
         isNot(contains('expect(finalState.requireValue.success, isNotNull);')),

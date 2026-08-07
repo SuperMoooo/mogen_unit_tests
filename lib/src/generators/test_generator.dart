@@ -16,11 +16,11 @@ import '../utils/mock_value_generator.dart';
 /// Rather than importing a hard-coded entity file, the generator does a
 /// first pass over every stubbed dependency call, resolves each method's
 /// declared signature from its source, extracts the leaf custom types
-/// (unwrapping Future<T>/FutureOr<T> and List<T>), locates the defining file
-/// on disk (searching every feature's entity/model/state folders — a
-/// dependency's types don't have to live in the consuming notifier's own
-/// feature) and emits a targeted import.  Primitives and nullable types that
-/// stub as `null` produce no import.
+/// (unwrapping `Future<T>`/`FutureOr<T>` and `List<T>`), locates the
+/// defining file on disk (searching every feature's entity/model/state
+/// folders — a dependency's types don't have to live in the consuming
+/// notifier's own feature) and emits a targeted import.  Primitives and
+/// nullable types that stub as `null` produce no import.
 ///
 /// Dependency mocking strategy
 /// ────────────────────────────
@@ -41,8 +41,10 @@ import '../utils/mock_value_generator.dart';
 /// is a notifier the project scan parsed (available via [notifierRegistry]),
 /// the mock instead *extends the real base class* and mixes `Mock` in:
 ///
-///   class MockOtherNotifier extends AsyncNotifier<OtherState>
-///       with Mock implements OtherNotifier {}
+/// ```dart
+/// class MockOtherNotifier extends AsyncNotifier<OtherState>
+///     with Mock implements OtherNotifier {}
+/// ```
 ///
 /// and its `build()` is stubbed in `setUp()`, so code under test that does
 /// `await ref.read(otherNotifierProvider.future)` resolves instead of
@@ -50,12 +52,14 @@ import '../utils/mock_value_generator.dart';
 ///
 /// Stub return value strategy
 /// ──────────────────────────
-///   void / Future<void>       → null
-///   nullable T?               → null
-///   primitive                 → literal  ('', 0, false, …)
-///   List<CustomType>          → [CustomType.empty()]
-///   List<primitive>           → []
-///   CustomType                → CustomType.empty()
+/// ```
+/// void / Future<void>       → null
+/// nullable T?               → null
+/// primitive                 → literal  ('', 0, false, …)
+/// List<CustomType>          → [CustomType.empty()]
+/// List<primitive>           → []
+/// CustomType                → CustomType.empty()
+/// ```
 ///
 /// Synchronous methods are stubbed with `thenReturn(...)` — answering a
 /// `Future` from a sync method is a runtime `TypeError`. `Future`-returning
@@ -260,8 +264,7 @@ class TestGenerator {
         for (final call in callsByMethod[method.name]![repo.type] ??
             const <RepositoryMethodCall>[]) {
           if (!seenInMethod.add(call.methodName)) continue;
-          usageCount[call.methodName] =
-              (usageCount[call.methodName] ?? 0) + 1;
+          usageCount[call.methodName] = (usageCount[call.methodName] ?? 0) + 1;
           firstSeen.putIfAbsent(call.methodName, () => call);
         }
       }
@@ -649,8 +652,7 @@ class TestGenerator {
           b.writeln(
               '          $provider.overrideWith((ref, arg) => mock${repo.type}),');
         } else {
-          b.writeln(
-              '          $provider.overrideWithValue(mock${repo.type}),');
+          b.writeln('          $provider.overrideWithValue(mock${repo.type}),');
         }
       }
       b.writeln('        ],');
@@ -667,8 +669,7 @@ class TestGenerator {
       b.writeln();
       b.writeln(
           '      // Arrange: stub build() on mocked notifier dependencies so');
-      b.writeln(
-          '      // reading them (or awaiting their .future) resolves.');
+      b.writeln('      // reading them (or awaiting their .future) resolves.');
       for (final repo in notifierDeps) {
         final dep = notifierRegistry[repo.type]!;
         final stateVal =
@@ -759,8 +760,7 @@ class TestGenerator {
     final awaitKw = method.isAsync ? 'await ' : '';
     final providerRead = _providerRead(n);
 
-    b.writeln(
-        "      test('${method.name} completes successfully', () async {");
+    b.writeln("      test('${method.name} completes successfully', () async {");
 
     _stubSuccessCalls(b, method, n, plan);
 
@@ -1056,8 +1056,7 @@ class TestGenerator {
   /// arguments alike (`chatProvider(roomId).notifier` → `chatProvider`) —
   /// `overrideWith`/`overrideWithValue` must be called on the base provider.
   String _baseProviderExpression(String expr) {
-    final match =
-        RegExp(r'^[a-zA-Z_][a-zA-Z0-9_]*').firstMatch(expr.trim());
+    final match = RegExp(r'^[a-zA-Z_][a-zA-Z0-9_]*').firstMatch(expr.trim());
     if (match != null) return match.group(0)!;
     return expr.replaceAll(RegExp(r'\.(notifier|future)\b'), '').trim();
   }
@@ -1074,7 +1073,14 @@ class TestGenerator {
     final type = rawType.trim();
     if (type.isEmpty || type.endsWith('?')) return false;
     const builtIn = {
-      'String', 'int', 'double', 'num', 'bool', 'dynamic', 'Object', 'void',
+      'String',
+      'int',
+      'double',
+      'num',
+      'bool',
+      'dynamic',
+      'Object',
+      'void',
     };
     if (builtIn.contains(type)) return false;
     final base = type.split('<').first.trim();
