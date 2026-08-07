@@ -144,8 +144,10 @@ class MockValueGenerator {
     final candidateClean = candidate.replaceAll('?', '').trim();
 
     if (isPrimitive(candidateClean) || candidateClean == 'dynamic') return null;
-    if (candidateClean.startsWith('Map<') || candidateClean.startsWith('Set<'))
+    if (candidateClean.startsWith('Map<') ||
+        candidateClean.startsWith('Set<')) {
       return null;
+    }
 
     return candidateClean;
   }

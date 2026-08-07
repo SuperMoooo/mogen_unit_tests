@@ -7,6 +7,8 @@ linter:
         prefer_const_declarations: true
         # Avoid print statements in production code.
         avoid_print: true
+        # Require blocks in flow control structures (multi-line if, for, while).
+        curly_braces_in_flow_control_structures: true
         # Keep generic types in doc comments backticked so pub.dev's dartdoc
         # does not swallow them as HTML tags.
         unintended_html_in_doc_comment: true
