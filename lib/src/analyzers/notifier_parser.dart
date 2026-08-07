@@ -272,15 +272,27 @@ class _NotifierVisitor extends RecursiveAstVisitor<void> {
     return source.split('=').skip(1).join('=').trim();
   }
 
+  /// Whether a call to [m] has to be awaited in the generated test.
+  ///
+  /// This is awaitability, not the `async` keyword. A method that hands back a
+  /// `Future` from a plain block body is just as awaitable — the common
+  /// `Future<void> login(...) { return runAction(...); }` shape delegates to a
+  /// helper and never writes `async` itself. Treating that as synchronous
+  /// leaves the call un-awaited, so the test asserts on the intermediate
+  /// loading state while the action is still in flight.
   bool _isAsync(MethodDeclaration m) {
     final body = m.body;
-    if (body is BlockFunctionBody) {
-      return body.keyword?.lexeme == 'async';
-    }
-    if (body is ExpressionFunctionBody) {
-      return body.keyword?.lexeme == 'async';
-    }
-    return false;
+    if (body.keyword?.lexeme == 'async') return true;
+    return _returnsFuture(m.returnType?.toSource());
+  }
+
+  /// Whether [returnType] is a `Future`/`FutureOr`, ignoring type arguments,
+  /// nullability and any library prefix (`async.Future<void>`).
+  bool _returnsFuture(String? returnType) {
+    if (returnType == null) return false;
+    final base = returnType.split('<').first.trim().replaceAll('?', '');
+    final name = base.split('.').last;
+    return name == 'Future' || name == 'FutureOr';
   }
 
   /// Splits the generic arguments of [type] at top level, respecting nested

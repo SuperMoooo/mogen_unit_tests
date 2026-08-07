@@ -8,7 +8,7 @@ import 'package:mogen_unit_tests/mogen_unit_tests.dart';
 import 'package:path/path.dart' as p;
 import 'package:yaml/yaml.dart';
 
-const _version = '1.2.3';
+const _version = '1.3.0';
 
 Future<void> main(List<String> arguments) async {
   final parser = ArgParser()

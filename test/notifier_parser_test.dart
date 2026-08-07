@@ -135,5 +135,54 @@ class CounterNotifier extends Notifier<int> {
         tempDir.deleteSync(recursive: true);
       }
     });
+
+    test(
+        'marks a method that returns a Future without the async keyword as '
+        'async, so the generated test awaits it instead of asserting on the '
+        'in-flight loading state', () {
+      final tempDir = Directory.systemTemp.createTempSync('mogen_parser_');
+      try {
+        final file =
+            File('${tempDir.path}${Platform.pathSeparator}auth_notifier.dart');
+        // `login` and `logout` delegate to a runAction-style helper, so the
+        // Future comes back from the body without the method itself being
+        // declared `async`.
+        file.writeAsStringSync('''
+class AuthNotifier extends AsyncNotifier<AuthState> with ActionNotifierMixin<AuthState> {
+  @override
+  Future<AuthState> build() async => AuthState.empty();
+
+  Future<void> login({required String email, required String password}) {
+    return runAction((_) async {
+      await ref.read(authRepositoryProvider).login(email: email, password: password);
+      return AuthState(authenticated: true);
+    });
+  }
+
+  Future<void> logout() => runAction((_) async {
+    await ref.read(authRepositoryProvider).logout();
+    return AuthState();
+  });
+
+  void reset() {}
+}
+''');
+
+        final parser =
+            NotifierParser(projectRoot: tempDir.path, packageName: 'app');
+        final notifiers = parser.parse(file.path);
+
+        final methods = {
+          for (final m in notifiers.first.methods) m.name: m,
+        };
+
+        expect(methods['login']!.isAsync, isTrue);
+        expect(methods['logout']!.isAsync, isTrue);
+        // A genuinely synchronous method must stay un-awaited.
+        expect(methods['reset']!.isAsync, isFalse);
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
   });
 }
