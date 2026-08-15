@@ -1,6 +1,26 @@
 // lib/src/models/notifier_info.dart
 
-/// Everything the generator needs to know about one Riverpod notifier class.
+/// The state-management framework a scanned logic class belongs to.
+///
+/// Drives which generator runs: Riverpod notifiers get `ProviderContainer`
+/// based tests, while `flutter_bloc` blocs and cubits get `bloc_test`
+/// (`blocTest<B, S>(...)`) based ones.
+enum StateManagementKind {
+  /// A Riverpod `Notifier`/`AsyncNotifier` (including the family and
+  /// autoDispose variants).
+  riverpod,
+
+  /// A `flutter_bloc` `Bloc<Event, State>` — actions are events added to the
+  /// bloc and handled by `on<Event>(...)` handlers.
+  bloc,
+
+  /// A `flutter_bloc` `Cubit<State>` — actions are the cubit's own public
+  /// methods.
+  cubit,
+}
+
+/// Everything the generator needs to know about one state-management class:
+/// a Riverpod notifier, a `flutter_bloc` `Bloc`, or a `Cubit`.
 class NotifierInfo {
   /// Creates metadata for a notifier discovered in the source tree.
   const NotifierInfo({
@@ -18,6 +38,10 @@ class NotifierInfo {
     required this.methods,
     this.stateInfo,
     this.sourceImports = const [],
+    this.kind = StateManagementKind.riverpod,
+    this.eventBaseType,
+    this.events = const [],
+    this.constructorParams = const [],
   });
 
   /// e.g. `CartNotifier`.
@@ -77,6 +101,36 @@ class NotifierInfo {
   /// source file already declares.
   final List<String> sourceImports;
 
+  /// Which state-management framework this class belongs to.
+  final StateManagementKind kind;
+
+  /// The event base type of a `Bloc<Event, State>` (e.g. `AuthEvent`).
+  ///
+  /// `null` for cubits and Riverpod notifiers, which have no event type.
+  final String? eventBaseType;
+
+  /// Every event the bloc registers a handler for via `on<Event>(...)`.
+  ///
+  /// These — not [methods] — are the actions a bloc's generated tests drive,
+  /// since a bloc is exercised by adding events to it.
+  final List<EventInfo> events;
+
+  /// The constructor parameters of a bloc or cubit, in declaration order.
+  ///
+  /// A bloc/cubit is instantiated directly in its test (`build: () =>
+  /// AuthBloc(mockAuthRepository)`), so the generator needs the constructor
+  /// shape to pass the mocks in the right positions.
+  final List<ParamInfo> constructorParams;
+
+  /// Whether this is a `flutter_bloc` `Bloc<Event, State>`.
+  bool get isBloc => kind == StateManagementKind.bloc;
+
+  /// Whether this is a `flutter_bloc` `Cubit<State>`.
+  bool get isCubit => kind == StateManagementKind.cubit;
+
+  /// Whether this is a Riverpod `Notifier`/`AsyncNotifier`.
+  bool get isRiverpod => kind == StateManagementKind.riverpod;
+
   /// Returns a copy of this notifier with [stateInfo] attached.
   NotifierInfo withStateInfo(StateInfo? stateInfo) => NotifierInfo(
         className: className,
@@ -93,7 +147,61 @@ class NotifierInfo {
         methods: methods,
         stateInfo: stateInfo,
         sourceImports: sourceImports,
+        kind: kind,
+        eventBaseType: eventBaseType,
+        events: events,
+        constructorParams: constructorParams,
       );
+}
+
+/// One event a `Bloc` handles, discovered from an `on<Event>(...)`
+/// registration in the bloc's constructor.
+class EventInfo {
+  /// Creates metadata for one registered bloc event.
+  const EventInfo({
+    required this.type,
+    this.isAsync = false,
+    this.handlerBodySource,
+  });
+
+  /// The event class name, e.g. `LoginRequested`.
+  final String type;
+
+  /// Whether the registered handler is asynchronous.
+  final bool isAsync;
+
+  /// The raw source of the handler body, when the parser captured it.
+  ///
+  /// Used for the same lightweight heuristics as [MethodInfo.bodySource] —
+  /// `null` means "unknown", and heuristics then give the benefit of the
+  /// doubt.
+  final String? handlerBodySource;
+}
+
+/// A bloc event class discovered in the source tree, with the constructor
+/// shape needed to instantiate it inside a generated `act:` callback.
+class EventClassInfo {
+  /// Creates metadata for one event class.
+  const EventClassInfo({
+    required this.className,
+    required this.importPath,
+    this.isPart = false,
+    this.params = const [],
+  });
+
+  /// The event class name, e.g. `LoginRequested`.
+  final String className;
+
+  /// The `package:` import path of the file declaring the event.
+  final String importPath;
+
+  /// Whether the declaring file is a `part of` another library — the
+  /// conventional bloc layout, where events and states are parts of the bloc
+  /// file. Part files must never be imported directly.
+  final bool isPart;
+
+  /// The constructor parameters needed to build an instance.
+  final List<ParamInfo> params;
 }
 
 /// A repository or service dependency detected inside the notifier.
@@ -184,6 +292,7 @@ class StateInfo {
     required this.className,
     required this.importPath,
     required this.fields,
+    this.isPart = false,
   });
 
   /// The state class name.
@@ -191,6 +300,12 @@ class StateInfo {
 
   /// The `package:` import path for the state file.
   final String importPath;
+
+  /// Whether the declaring file is a `part of` another library — the
+  /// conventional bloc layout (`part 'auth_state.dart';` inside
+  /// `auth_bloc.dart`). Importing a part file directly is a compile error,
+  /// so the generator imports the owning library instead.
+  final bool isPart;
 
   /// The fields discovered on the state model.
   final List<StateField> fields;

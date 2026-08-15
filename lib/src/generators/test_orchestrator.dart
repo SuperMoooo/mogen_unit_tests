@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../analyzers/event_parser.dart';
 import '../analyzers/feature_scanner.dart';
 import '../analyzers/notifier_parser.dart';
 import '../analyzers/state_parser.dart';
@@ -58,6 +59,8 @@ class TestOrchestrator {
         NotifierParser(projectRoot: projectRoot, packageName: packageName);
     final stateParser =
         StateParser(projectRoot: projectRoot, packageName: packageName);
+    final eventParser =
+        EventParser(projectRoot: projectRoot, packageName: packageName);
 
     var bundles = scanner.scan();
     if (feature != null && feature!.isNotEmpty) {
@@ -77,9 +80,17 @@ class TestOrchestrator {
     final parsedByBundle = <FeatureBundle, List<NotifierInfo>>{};
     final notifierIndex = <String, String>{};
     final notifierRegistry = <String, NotifierInfo>{};
+    // Bloc events are looked up by the exact class name registered with
+    // `on<Event>(...)`, and an event may well be declared in another feature's
+    // file, so the registry is built project-wide.
+    final eventRegistry = <String, EventClassInfo>{};
 
     for (final bundle in bundles) {
       final states = stateParser.parseAll(bundle.stateFiles);
+
+      for (final event in eventParser.parseAll(bundle.eventFiles)) {
+        eventRegistry.putIfAbsent(event.className, () => event);
+      }
 
       final notifiers = <NotifierInfo>[];
       for (final notifierFile in bundle.notifierFiles) {
@@ -116,6 +127,7 @@ class TestOrchestrator {
       projectRoot: projectRoot,
       notifierIndex: notifierIndex,
       notifierRegistry: notifierRegistry,
+      eventRegistry: eventRegistry,
     );
 
     int written = 0;
@@ -126,11 +138,16 @@ class TestOrchestrator {
       _log('📁  ${bundle.featureName}');
 
       for (final notifier in parsedByBundle[bundle] ?? const <NotifierInfo>[]) {
+        final kind = switch (notifier.kind) {
+          StateManagementKind.bloc => 'bloc',
+          StateManagementKind.cubit => 'cubit',
+          StateManagementKind.riverpod => 'riverpod',
+        };
         if (notifier.stateInfo != null) {
-          _log(
-              '    ✅  ${notifier.className} → state: ${notifier.stateInfo!.className}');
+          _log('    ✅  ${notifier.className} [$kind] → state: '
+              '${notifier.stateInfo!.className}');
         } else {
-          _log('    ✅  ${notifier.className} (no state matched)');
+          _log('    ✅  ${notifier.className} [$kind] (no state matched)');
         }
 
         final content = generator.generate(notifier);

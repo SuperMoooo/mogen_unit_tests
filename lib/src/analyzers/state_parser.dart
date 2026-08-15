@@ -40,7 +40,13 @@ class StateParser {
   List<StateInfo> _parse(String filePath) {
     final content = File(filePath).readAsStringSync();
     final parsed = parseString(content: content, path: filePath);
-    final visitor = _StateVisitor(importPath: _toPackagePath(filePath));
+    final visitor = _StateVisitor(
+      importPath: _toPackagePath(filePath),
+      // `part 'auth_state.dart';` inside the bloc file is the conventional
+      // bloc layout; the generated test must import the bloc library rather
+      // than the part file, which cannot be imported at all.
+      isPart: parsed.unit.directives.whereType<PartOfDirective>().isNotEmpty,
+    );
     parsed.unit.visitChildren(visitor);
     return visitor.states;
   }
@@ -56,9 +62,10 @@ class StateParser {
 }
 
 class _StateVisitor extends RecursiveAstVisitor<void> {
-  _StateVisitor({required this.importPath});
+  _StateVisitor({required this.importPath, this.isPart = false});
 
   final String importPath;
+  final bool isPart;
   final List<StateInfo> states = [];
 
   @override
@@ -105,6 +112,7 @@ class _StateVisitor extends RecursiveAstVisitor<void> {
       className: name,
       importPath: importPath,
       fields: fields,
+      isPart: isPart,
     ));
   }
 
@@ -131,12 +139,7 @@ class _StateVisitor extends RecursiveAstVisitor<void> {
   }
 
   String _extractTypeFromSource(String source, String? name) {
-    final trimmed = source.trim();
-    if (trimmed.startsWith('this.') || trimmed.startsWith('super.')) {
-      return 'dynamic';
-    }
-
-    String normalized = trimmed;
+    String normalized = source.trim();
     if (normalized.contains('=')) {
       normalized = normalized.split('=').first.trim();
     }
@@ -145,6 +148,13 @@ class _StateVisitor extends RecursiveAstVisitor<void> {
       RegExp(r'^(required|covariant|final|const|late|var)\s+'),
       '',
     );
+
+    // Modifiers come first (`required this.email`), so the field-formal check
+    // only holds once they're stripped — otherwise the type would resolve to
+    // the literal string `this.`.
+    if (normalized.startsWith('this.') || normalized.startsWith('super.')) {
+      return 'dynamic';
+    }
 
     if (name == null || !normalized.contains(name)) {
       return 'dynamic';
@@ -155,13 +165,7 @@ class _StateVisitor extends RecursiveAstVisitor<void> {
   }
 
   String? _extractNameFromSource(String source) {
-    final trimmed = source.trim();
-    if (trimmed.startsWith('this.') || trimmed.startsWith('super.')) {
-      final name = trimmed.split('.').last.trim();
-      return name.isEmpty ? null : name;
-    }
-
-    String normalized = trimmed;
+    String normalized = source.trim();
     if (normalized.contains('=')) {
       normalized = normalized.split('=').first.trim();
     }
@@ -170,6 +174,11 @@ class _StateVisitor extends RecursiveAstVisitor<void> {
       RegExp(r'^(required|covariant|final|const|late|var)\s+'),
       '',
     );
+
+    if (normalized.startsWith('this.') || normalized.startsWith('super.')) {
+      final name = normalized.split('.').last.trim();
+      return name.isEmpty ? null : name;
+    }
 
     final token = normalized.split(RegExp(r'\s+')).lastOrNull;
     return token == null || token.isEmpty ? null : token;

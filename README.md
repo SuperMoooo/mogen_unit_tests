@@ -1,12 +1,22 @@
 # mogen_unit_tests
 
-`mogen_unit_tests` scans your Flutter feature folders, parses Riverpod notifiers, and generates **Mocktail-based unit test scaffolding** for each discovered notifier.
+`mogen_unit_tests` scans your Flutter feature folders, parses your state-management classes — **Riverpod** notifiers as well as **flutter_bloc** blocs and cubits — and generates **Mocktail-based unit test scaffolding** for each one.
 
-It is designed for projects that keep their notifier and state files under `lib/features/**/presentation/` and want a fast starting point for repeatable unit tests.
+Each framework gets the tests its own ecosystem expects:
+
+| Class under test                      | Generated with                                 |
+| ------------------------------------- | ---------------------------------------------- |
+| Riverpod `Notifier` / `AsyncNotifier` | `ProviderContainer` + Mocktail                 |
+| `flutter_bloc` `Bloc<Event, State>`   | `bloc_test`'s `blocTest<B, S>(...)` + Mocktail |
+| `flutter_bloc` `Cubit<State>`         | `bloc_test`'s `blocTest<B, S>(...)` + Mocktail |
+
+Detection is automatic — you don't pick a mode. Each class is classified by the base class it extends, so a project migrating from one framework to the other gets the right tests for both halves in a single run.
+
+It is designed for projects that keep their logic and state files under `lib/features/**/presentation/` and want a fast starting point for repeatable unit tests.
 
 ---
 
-## What it generates
+## What it generates for Riverpod notifiers
 
 For every notifier it finds, the package creates a ready-to-run test file with:
 
@@ -22,6 +32,48 @@ For every notifier it finds, the package creates a ready-to-run test file with:
 - optional state field assertions when `stateInfo` is available — the `success` message is only asserted when the method body actually mentions the field
 - **family support**: `FamilyAsyncNotifier`/`FamilyNotifier` (and their `AutoDispose` variants) are read as `provider(familyArg)` everywhere, with the argument declared once from the family's argument type; family *dependencies* have their captured call arguments stripped and are overridden on the base provider
 
+## What it generates for blocs and cubits
+
+For every `Bloc`/`Cubit` it finds, the package creates a `bloc_test` file with:
+
+- `Mock<Type>` classes for every **constructor-injected** dependency — constructor injection is the bloc DI seam, so every collaborator the constructor takes is mocked regardless of its type name, while plain configuration values (`int pageSize`, an injected initial state, …) are left alone
+- **bloc dependencies mocked safely**: a dependency that is itself a bloc or cubit gets `bloc_test`'s `MockBloc<E, S>`/`MockCubit<S>` base instead of a bare `Mock` (which has no state stream), and its `state` is stubbed in `setUp`
+- a `build<ClassName>()` helper wired with those mocks, used as every `blocTest`'s `build:`
+- one test group **per event** for a bloc — every `on<Event>(...)` registration — whose `act:` adds a real event instance built from the event class's own constructor. Both inline `(event, emit) {...}` closures and tear-off handlers (`on<LoginRequested>(_onLoginRequested)`) are followed to find the calls each handler makes
+- one test group **per public method** for a cubit, whose `act:` calls the method
+- a `starts in a valid initial state` test that constructs and closes the class, catching a constructor that throws
+- calls made by the constructor itself stubbed once in `setUp()` — the bloc analogue of a notifier's `build()`
+- two `blocTest`s per action: a success path (`verify:` asserts the collaborator was reached and the settled state) and an error path that stubs the action's own calls with `thenThrow(AppException.test())`
+- an error path that adapts to the handler: when the handler catches the failure and turns it into state, the test asserts the state fields; when it doesn't, the error escapes to the bloc's error handler, so the test asserts `errors: () => [isA<AppException>()]` instead of a state field the error never reaches
+- a commented `expect:` scaffold for the exact sequence of emitted states — that sequence can't be known without running the bloc, and a wrong `expect:` list fails every run
+
+```dart
+blocTest<AuthBloc, AuthState>(
+  'LoginRequested completes successfully',
+  setUp: () {
+    when(() => mockAuthRepository.login(
+          email: any(named: 'email'),
+          password: any(named: 'password'),
+        )).thenAnswer((_) async => UserEntity.empty());
+  },
+  build: buildAuthBloc,
+  act: (bloc) => bloc.add(LoginRequested(email: '', password: '')),
+  // Add an `expect:` list here to assert the exact sequence of
+  // emitted states, e.g. `expect: () => [isA<AuthState>()],`.
+  verify: (bloc) {
+    verify(() => mockAuthRepository.login(
+          email: any(named: 'email'),
+          password: any(named: 'password'),
+        )).called(greaterThanOrEqualTo(1));
+    expect(bloc.state.isLoading, isFalse);
+    expect(bloc.state.error, isNull);
+    expect(bloc.state.success, isNotNull);
+  },
+);
+```
+
+State and event classes declared as `part` of the bloc file — the conventional `flutter_bloc` layout — are recognised as parts and are never imported separately (importing a part file doesn't compile); the single bloc import already brings them in.
+
 ### Conventions this generator assumes
 
 The generated tests lean on a few conventions rather than guessing blindly. If your project doesn't follow them, the generated file will need manual edits to compile:
@@ -35,28 +87,48 @@ The generated tests lean on a few conventions rather than guessing blindly. If y
 
 ## Project layout
 
-The CLI expects this layout inside your Flutter app:
+The CLI expects a feature-first layout inside your Flutter app. Both the Riverpod and the `flutter_bloc` conventions are scanned:
 
 ```text
 lib/
 └── features/
-    └── cart/
+    ├── cart/                      # Riverpod
+    │   └── presentation/
+    │       ├── notifiers/
+    │       │   └── cart_notifier.dart
+    │       └── states/
+    │           └── cart_state.dart
+    └── auth/                      # flutter_bloc
         └── presentation/
-            ├── notifiers/
-            │   └── cart_notifier.dart
-            └── states/
-                └── cart_state.dart
+            └── bloc/
+                ├── auth_bloc.dart
+                ├── auth_event.dart   # usually `part of` auth_bloc.dart
+                └── auth_state.dart   # usually `part of` auth_bloc.dart
 ```
+
+These folders are scanned (recursively) inside every feature:
+
+| Folder                                                                                 | Holds              |
+| -------------------------------------------------------------------------------------- | ------------------ |
+| `presentation/notifiers`, `presentation/notifier`                                      | Riverpod notifiers |
+| `presentation/bloc`, `presentation/blocs`, `presentation/cubit`, `presentation/cubits` | blocs and cubits   |
+| `presentation/logic`, and top-level `bloc/`, `blocs/`, `cubit/`, `cubits/`             | either             |
+| `presentation/states`, `presentation/state`                                            | state classes      |
+
+A `*_state.dart` file sitting beside a bloc is treated as a state file too, since bloc projects rarely use a separate `states/` folder.
 
 ---
 
 ## Installation
 
-Add the package to your Flutter app's `dev_dependencies`:
+Add the package to your Flutter app's `dev_dependencies`, together with the packages the generated tests import:
 
 ```yaml
 dev_dependencies:
     mogen_unit_tests:
+    mocktail: ^1.0.0
+    # Only needed if you have blocs or cubits:
+    bloc_test: ^10.0.0
 ```
 
 Install it:
@@ -316,24 +388,30 @@ Everything else is generated for you.
 
 ---
 
-## Supported notifier types
+## Supported class types
 
-| Class                                     | Supported |
-| ----------------------------------------- | --------- |
-| `AsyncNotifier<T>`                        | ✅        |
-| `AutoDisposeAsyncNotifier<T>`             | ✅        |
-| `Notifier<T>`                             | ✅        |
-| `AutoDisposeNotifier<T>`                  | ✅        |
-| `FamilyAsyncNotifier<T, Arg>`             | ✅        |
-| `AutoDisposeFamilyAsyncNotifier<T, Arg>`  | ✅        |
-| `FamilyNotifier<T, Arg>`                  | ✅        |
-| `AutoDisposeFamilyNotifier<T, Arg>`       | ✅        |
+| Class                                                   | Supported | Test style        |
+| ------------------------------------------------------- | --------- | ----------------- |
+| `AsyncNotifier<T>`                                      | ✅        | ProviderContainer |
+| `AutoDisposeAsyncNotifier<T>`                           | ✅        | ProviderContainer |
+| `Notifier<T>`                                           | ✅        | ProviderContainer |
+| `AutoDisposeNotifier<T>`                                | ✅        | ProviderContainer |
+| `FamilyAsyncNotifier<T, Arg>`                           | ✅        | ProviderContainer |
+| `AutoDisposeFamilyAsyncNotifier<T, Arg>`                | ✅        | ProviderContainer |
+| `FamilyNotifier<T, Arg>`                                | ✅        | ProviderContainer |
+| `AutoDisposeFamilyNotifier<T, Arg>`                     | ✅        | ProviderContainer |
+| `Bloc<Event, State>`                                    | ✅        | `bloc_test`       |
+| `Cubit<State>`                                          | ✅        | `bloc_test`       |
+| `HydratedBloc`, `ReplayBloc`, `HydratedCubit`, …        | ✅        | `bloc_test`       |
+| A project-local base (`class X extends BaseBloc<E, S>`) | ✅        | `bloc_test`       |
 
 Family notifiers are read with a generated `familyArg` (built from the family's argument type) at every `provider(familyArg)` read.
 
+Blocs and cubits are matched by the *suffix* of their base class (`…Bloc` / `…Cubit`), so a project-local base class is recognised too.
+
 Classes extending `ChangeNotifier`/`ValueNotifier` are deliberately skipped even when they live under `presentation/notifiers/` — they aren't Riverpod notifiers.
 
-Dependencies of any kind — repositories, services, clients, other notifiers — are detected from `ref.read(...)` and `ref.watch(...)` calls inside the notifier implementation.
+Dependencies of any kind — repositories, services, clients, other notifiers/blocs — are detected from `ref.read(...)`/`ref.watch(...)` calls for notifiers, and from constructor parameters for blocs and cubits.
 
 ---
 
@@ -341,7 +419,9 @@ Dependencies of any kind — repositories, services, clients, other notifiers �
 
 - Generates **unit tests only** — no widget or integration tests
 - Dependency stubs are autogenerated and may require manual return-value adjustments
-- Only notifiers under `presentation/notifiers/` are scanned
+- Only the folders listed under [Project layout](#project-layout) are scanned
+- For blocs and cubits the **sequence** of emitted states is never generated — the settled state is asserted in `verify:`, and a commented `expect:` scaffold is left for you to fill in
+- Bloc dependencies are read from the constructor; a bloc that pulls collaborators from a service locator (`GetIt.I<AuthRepository>()`) inside its handlers won't have them detected
 - Assumes `AppException.test()` exists (see [Conventions this generator assumes](#conventions-this-generator-assumes)) — projects without it will need to adjust the error-path stubs manually
 - Notifier dependencies get a runtime-safe mock only when their source was found by the project scan; a notifier dependency the scan never saw falls back to a plain `Mock`, which Riverpod cannot wire — replace it with a hand-written stub subclass in that case
 - The success-path state assertion for the `success` field relies on a textual check of the method body — a method that sets it through a helper the generator can't see loses that one assertion
@@ -352,7 +432,7 @@ Dependencies of any kind — repositories, services, clients, other notifiers �
 
 | Package      | Purpose                                  |
 | ------------ | ---------------------------------------- |
-| `analyzer`   | AST parsing of notifier source files     |
+| `analyzer`   | AST parsing of the scanned source files  |
 | `dart_style` | Formatting generated Dart output         |
 | `args`       | CLI flag parsing                         |
 | `glob`       | Discovering feature folders              |

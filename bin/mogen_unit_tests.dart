@@ -8,7 +8,7 @@ import 'package:mogen_unit_tests/mogen_unit_tests.dart';
 import 'package:path/path.dart' as p;
 import 'package:yaml/yaml.dart';
 
-const _version = '1.3.1';
+const _version = '1.4.0';
 
 Future<void> main(List<String> arguments) async {
   final parser = ArgParser()
@@ -97,7 +97,9 @@ Future<void> main(List<String> arguments) async {
   if (!featuresDir.existsSync()) {
     stderr.writeln(
       'Error: lib/features/ not found inside $root.\n'
-      'Expected structure: lib/features/<featureName>/presentation/notifiers/',
+      'Expected structure: lib/features/<featureName>/presentation/<folder>/, '
+      'where <folder> is notifiers/ (Riverpod) or bloc/, blocs/, cubit/, '
+      'cubits/ (flutter_bloc).',
     );
     exit(1);
   }
@@ -171,14 +173,15 @@ void _printBanner() {
 ╔══════════════════════════════════════════════╗
 ║         mogen_unit_tests  v$_version          ║
 ║   Auto-generate Mocktail unit tests for      ║
-║   Riverpod notifier classes                  ║
+║   Riverpod notifiers and flutter_bloc        ║
+║   blocs & cubits (via bloc_test)             ║
 ╚══════════════════════════════════════════════╝
 ''');
 }
 
 void _printUsage(ArgParser parser) {
-  print(
-      'mogen_unit_tests — generate Mocktail unit tests for Riverpod notifiers');
+  print('mogen_unit_tests — generate Mocktail unit tests for Riverpod '
+      'notifiers and flutter_bloc blocs/cubits');
   print('');
   print('Usage: dart run mogen_unit_tests [options]');
   print('');

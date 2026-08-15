@@ -5,6 +5,7 @@ import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 
+import 'ast_helpers.dart';
 import 'provider_type_resolver.dart';
 
 /// Detects method calls made on a specific repository type within source code.
@@ -67,6 +68,85 @@ class MethodCallDetector {
       final parsed = parseString(content: content, path: notifierSourcePath);
       final visitor = _MethodCallVisitor(repoType, methodName, fieldName);
       parsed.unit.visitChildren(visitor);
+      return visitor.methodCalls.values.toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Parses a bloc source file and extracts the calls made to [repoType]
+  /// inside the handler registered for [eventType].
+  ///
+  /// A bloc's work doesn't live in its own methods — it lives in the handler
+  /// passed to `on<Event>(...)`, so scoping by method name (as the Riverpod
+  /// path does) would find nothing. Both handler styles are supported: an
+  /// inline `(event, emit) async { ... }` closure, and a tear-off
+  /// (`on<LoginRequested>(_onLoginRequested)`) whose declaration is then
+  /// scanned instead.
+  static List<RepositoryMethodCall> detectEventHandlerCalls(
+    String blocSourcePath,
+    String repoType, {
+    required String eventType,
+    String? fieldName,
+  }) {
+    try {
+      final content = File(blocSourcePath).readAsStringSync();
+      final parsed = parseString(content: content, path: blocSourcePath);
+
+      final finder = _EventHandlerFinder(eventType);
+      parsed.unit.visitChildren(finder);
+
+      final handler = finder.handler;
+      if (handler == null) return [];
+
+      final closure = AstHelpers.firstFunctionExpression(handler);
+      if (closure != null) {
+        final visitor = _MethodCallVisitor(repoType, null, fieldName);
+        closure.body.visitChildren(visitor);
+        return visitor.methodCalls.values.toList();
+      }
+
+      final source = handler.toSource().trim();
+      if (!AstHelpers.isIdentifier(source)) return [];
+
+      final visitor = _MethodCallVisitor(repoType, source, fieldName);
+      parsed.unit.visitChildren(visitor);
+      return visitor.methodCalls.values.toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Parses a source file and extracts the calls to [repoType] made directly
+  /// in a constructor body.
+  ///
+  /// This is the bloc/cubit analogue of a notifier's `build()`: work kicked
+  /// off at construction time (a stream subscription, an initial load) runs
+  /// for *every* test, so those stubs belong in `setUp()` rather than in each
+  /// individual test. Closures are skipped, since an `on<Event>(...)` handler
+  /// declared in the same constructor only runs when that event is added.
+  static List<RepositoryMethodCall> detectConstructorCalls(
+    String sourcePath,
+    String repoType, {
+    String? fieldName,
+  }) {
+    try {
+      final content = File(sourcePath).readAsStringSync();
+      final parsed = parseString(content: content, path: sourcePath);
+
+      final finder = _ConstructorBodyFinder();
+      parsed.unit.visitChildren(finder);
+      if (finder.bodies.isEmpty) return [];
+
+      final visitor = _MethodCallVisitor(
+        repoType,
+        null,
+        fieldName,
+        skipClosures: true,
+      );
+      for (final body in finder.bodies) {
+        body.visitChildren(visitor);
+      }
       return visitor.methodCalls.values.toList();
     } catch (_) {
       return [];
@@ -194,15 +274,67 @@ class _TypeAnnotationFinder extends GeneralizingAstVisitor<void> {
   }
 }
 
+// ─── Bloc handler / constructor finders ──────────────────────────────────────
+
+/// Finds the handler argument of the `on<EventType>(...)` registration for a
+/// specific event type.
+class _EventHandlerFinder extends RecursiveAstVisitor<void> {
+  _EventHandlerFinder(this.eventType);
+
+  final String eventType;
+  AstNode? handler;
+
+  @override
+  void visitMethodInvocation(MethodInvocation node) {
+    super.visitMethodInvocation(node);
+
+    if (handler != null) return;
+    if (node.methodName.name != 'on') return;
+
+    final typeArgs = node.typeArguments?.arguments;
+    if (typeArgs == null || typeArgs.isEmpty) return;
+    if (typeArgs.first.toSource() != eventType) return;
+
+    handler = AstHelpers.firstArgument(node.argumentList);
+  }
+}
+
+/// Collects the body of every constructor declared in the compilation unit.
+class _ConstructorBodyFinder extends RecursiveAstVisitor<void> {
+  final List<FunctionBody> bodies = [];
+
+  @override
+  void visitConstructorDeclaration(ConstructorDeclaration node) {
+    bodies.add(node.body);
+    super.visitConstructorDeclaration(node);
+  }
+}
+
 // ─── Method-call visitor ─────────────────────────────────────────────────────
 
 class _MethodCallVisitor extends RecursiveAstVisitor<void> {
-  _MethodCallVisitor(this.repoType, this.methodName, this.fieldName);
+  _MethodCallVisitor(
+    this.repoType,
+    this.methodName,
+    this.fieldName, {
+    this.skipClosures = false,
+  });
 
   final String repoType;
   final String? methodName;
   final String? fieldName;
+
+  /// When `true`, calls nested inside a closure are ignored — used to keep a
+  /// bloc's `on<Event>(...)` handlers out of the constructor-time scan.
+  final bool skipClosures;
+
   final Map<String, RepositoryMethodCall> methodCalls = {};
+
+  @override
+  void visitFunctionExpression(FunctionExpression node) {
+    if (skipClosures) return;
+    super.visitFunctionExpression(node);
+  }
 
   @override
   void visitMethodDeclaration(MethodDeclaration node) {
@@ -214,6 +346,15 @@ class _MethodCallVisitor extends RecursiveAstVisitor<void> {
     if (node.name.lexeme == methodName) {
       node.body.visitChildren(this);
     }
+  }
+
+  @override
+  void visitConstructorDeclaration(ConstructorDeclaration node) {
+    // A method-scoped scan must not pick up calls the constructor makes — a
+    // bloc registers all of its `on<Event>(...)` handlers there, so without
+    // this every event's calls would leak into every other event's stubs.
+    if (methodName != null) return;
+    super.visitConstructorDeclaration(node);
   }
 
   @override

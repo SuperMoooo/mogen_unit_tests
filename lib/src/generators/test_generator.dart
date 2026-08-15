@@ -1,13 +1,12 @@
 // lib/src/generators/test_generator.dart
 
-import 'dart:io';
-
 import 'package:dart_style/dart_style.dart';
-import 'package:path/path.dart' as p;
 
 import '../models/notifier_info.dart';
 import '../utils/method_call_detector.dart';
 import '../utils/mock_value_generator.dart';
+import 'bloc_test_generator.dart';
+import 'generator_support.dart';
 
 /// Generates a complete Mocktail + Riverpod test file for one [NotifierInfo].
 ///
@@ -92,7 +91,17 @@ class TestGenerator {
     required this.projectRoot,
     this.notifierIndex = const {},
     this.notifierRegistry = const {},
-  });
+    this.eventRegistry = const {},
+  })  : _importResolver = ImportResolver(
+          projectRoot: projectRoot,
+          notifierIndex: notifierIndex,
+        ),
+        _blocGenerator = BlocTestGenerator(
+          projectRoot: projectRoot,
+          notifierIndex: notifierIndex,
+          notifierRegistry: notifierRegistry,
+          eventRegistry: eventRegistry,
+        );
 
   /// Absolute path to the Flutter project root.
   final String projectRoot;
@@ -107,11 +116,24 @@ class TestGenerator {
   /// signatures.
   final Map<String, NotifierInfo> notifierRegistry;
 
+  /// Event class name → parsed event class, for every bloc event found in the
+  /// project. Only used when delegating a bloc to [BlocTestGenerator].
+  final Map<String, EventClassInfo> eventRegistry;
+
+  final ImportResolver _importResolver;
+  final BlocTestGenerator _blocGenerator;
+
   final _fmt =
       DartFormatter(languageVersion: DartFormatter.latestLanguageVersion);
 
   /// Generates a test file for the provided [notifier].
+  ///
+  /// `flutter_bloc` blocs and cubits are handed to [BlocTestGenerator], which
+  /// emits `bloc_test` scaffolding instead of Riverpod `ProviderContainer`
+  /// scaffolding.
   String generate(NotifierInfo notifier) {
+    if (!notifier.isRiverpod) return _blocGenerator.generate(notifier);
+
     final plan = _buildPlan(notifier);
 
     // The body is generated before the imports so we know whether any error
@@ -370,172 +392,11 @@ class TestGenerator {
     b.writeln();
   }
 
-  /// Types whose mock class needs an import from a well-known pub package
-  /// rather than anything discoverable inside the project itself.
-  static const _wellKnownPackageImports = {
-    'GoRouter': 'package:go_router/go_router.dart',
-  };
+  List<String> _resolveDependencyImports(RepositoryDep repo, NotifierInfo n) =>
+      _importResolver.dependencyImports(repo, n);
 
-  /// Resolves the import(s) needed for [repo]'s mock class to compile, trying
-  /// (in order) well-known SDK packages, the project-wide notifier index,
-  /// the notifier's own source imports, and the Clean-Architecture
-  /// repository convention. Emits a `// TODO` comment instead of a guess when
-  /// nothing resolves.
-  List<String> _resolveDependencyImports(RepositoryDep repo, NotifierInfo n) {
-    final wellKnown = _wellKnownPackageImports[repo.type];
-    if (wellKnown != null) return ["import '$wellKnown';"];
-
-    final indexed = notifierIndex[repo.type];
-    if (indexed != null) return ["import '$indexed';"];
-
-    final fromSource = _findSourceImport(repo.type, n);
-    if (fromSource != null) {
-      if (fromSource.isImplOnly && _isRepositorySuffix(repo.type)) {
-        // The notifier's own source only imports the `_impl` file (likely
-        // where the provider itself is declared) — the mock class still
-        // needs the bare interface type for `implements $Type` to compile,
-        // and the impl file isn't guaranteed to re-export it. The feature
-        // name is taken from the *resolved impl import* rather than the
-        // notifier's own feature, since the dependency may well live in a
-        // different feature than the notifier consuming it (e.g. an
-        // `AuthNotifier` depending on a `UserRepository` that lives under
-        // `features/user/`, not `features/auth/`).
-        final featureName = _extractFeatureName(fromSource.uri);
-        final snakeCase = _toSnakeCase(repo.type);
-        return [
-          "import 'package:${n.packageName}/features/$featureName/domain/repositories/$snakeCase.dart';",
-          "import '${fromSource.uri}';",
-        ];
-      }
-      return ["import '${fromSource.uri}';"];
-    }
-
-    if (_isRepositorySuffix(repo.type)) {
-      final snakeCase = _toSnakeCase(repo.type);
-      // Prefer the feature folder the repository interface actually lives
-      // in on disk — a dependency doesn't necessarily belong to the
-      // consuming notifier's own feature (e.g. an `AuthNotifier` reading a
-      // `UserRepository` that lives under `features/user/`). Only fall back
-      // to assuming the notifier's own feature when nothing is found (e.g.
-      // in unit tests against a fabricated project root).
-      final featureName = _findActualFeatureFolder(snakeCase) ??
-          _extractFeatureName(n.importPath);
-      return [
-        "import 'package:${n.packageName}/features/$featureName/domain/repositories/$snakeCase.dart';",
-        "import 'package:${n.packageName}/features/$featureName/data/repositories/${snakeCase}_impl.dart';",
-      ];
-    }
-
-    return [
-      '// TODO(mogen_unit_tests): could not resolve an import for '
-          "'${repo.type}' — add the correct import manually so "
-          'Mock${repo.type} compiles.',
-    ];
-  }
-
-  /// Scans `lib/features/*/domain/repositories/` on disk for a file named
-  /// `$repositoryFileName.dart` and returns the feature folder it was found
-  /// in, or `null` if no such file exists anywhere in the project.
-  String? _findActualFeatureFolder(String repositoryFileName) {
-    final featuresDir = Directory(p.join(projectRoot, 'lib', 'features'));
-    if (!featuresDir.existsSync()) return null;
-
-    for (final entry in featuresDir.listSync()) {
-      if (entry is! Directory) continue;
-      final candidate = File(p.join(
-          entry.path, 'domain', 'repositories', '$repositoryFileName.dart'));
-      if (candidate.existsSync()) {
-        return p.basename(entry.path);
-      }
-    }
-    return null;
-  }
-
-  /// Conventional folders a custom type's defining file can live in, in
-  /// search-priority order.
-  static const _typeFolders = [
-    'domain/entities',
-    'data/models',
-    'domain/models',
-    'presentation/states',
-  ];
-
-  /// Builds the import line for a custom [typeName]: first searches every
-  /// feature's entity/model/state folders on disk (a type doesn't have to
-  /// live in the consuming notifier's own feature), then falls back to a
-  /// name-suffix guess inside the notifier's feature.
-  String _typeImport(String typeName, NotifierInfo n) {
-    final snakeFile = _toSnakeCase(typeName);
-
-    final featuresDir = Directory(p.join(projectRoot, 'lib', 'features'));
-    if (featuresDir.existsSync()) {
-      for (final entry in featuresDir.listSync()) {
-        if (entry is! Directory) continue;
-        for (final sub in _typeFolders) {
-          final candidate = File(
-              p.joinAll([entry.path, ...sub.split('/'), '$snakeFile.dart']));
-          if (candidate.existsSync()) {
-            final featureName = p.basename(entry.path);
-            return "import 'package:${n.packageName}/features/$featureName/$sub/$snakeFile.dart';";
-          }
-        }
-      }
-    }
-
-    final featureName = _extractFeatureName(n.importPath);
-    final subFolder = _entitySubfolder(typeName);
-    return "import 'package:${n.packageName}/features/$featureName/$subFolder/$snakeFile.dart';";
-  }
-
-  /// Returns the `lib/features/<feature>/` sub-path where a custom type
-  /// class file is likely to live based on its name suffix.
-  String _entitySubfolder(String typeName) {
-    final lower = typeName.toLowerCase();
-    if (lower.endsWith('entity')) return 'domain/entities';
-    if (lower.endsWith('model')) return 'data/models';
-    if (lower.endsWith('data')) return 'data/models';
-    if (lower.endsWith('state')) return 'presentation/states';
-    // Default — most custom return types in Clean Architecture are entities.
-    return 'domain/entities';
-  }
-
-  /// Looks for an import already declared in the notifier's own source file
-  /// whose target file plausibly defines [type]. Reports whether the match
-  /// was the `_impl` file specifically (as opposed to the bare interface),
-  /// since that changes what else the caller needs to import.
-  ({String uri, bool isImplOnly})? _findSourceImport(
-      String type, NotifierInfo n) {
-    final snake = _toSnakeCase(type);
-    for (final uri in n.sourceImports) {
-      final base = p.basenameWithoutExtension(uri);
-      if (base == snake) {
-        return (uri: _toPortableImport(uri, n), isImplOnly: false);
-      }
-      if (base == '${snake}_impl') {
-        return (uri: _toPortableImport(uri, n), isImplOnly: true);
-      }
-    }
-    return null;
-  }
-
-  /// Converts a possibly-relative import URI (valid from the notifier's own
-  /// source file) into a `package:` import valid from anywhere, since the
-  /// generated test lives in a different directory than the notifier.
-  String _toPortableImport(String uri, NotifierInfo n) {
-    if (uri.startsWith('package:') || uri.startsWith('dart:')) return uri;
-
-    final sourceDir = p.dirname(n.sourceFilePath);
-    final absoluteTarget = p.normalize(p.join(sourceDir, uri));
-    final libPath = p.join(projectRoot, 'lib');
-
-    if (p.isWithin(libPath, absoluteTarget)) {
-      final rel =
-          p.relative(absoluteTarget, from: libPath).replaceAll(r'\', '/');
-      return 'package:${n.packageName}/$rel';
-    }
-
-    return absoluteTarget.replaceAll(r'\', '/');
-  }
+  String _typeImport(String typeName, NotifierInfo n) =>
+      _importResolver.typeImport(typeName, n);
 
   // ── Mock classes ─────────────────────────────────────────────────────────
 
@@ -990,56 +851,17 @@ class TestGenerator {
     }
   }
 
-  /// Writes one success `when(...)` stub, choosing `thenAnswer`/`thenReturn`
-  /// from the resolved [returnType]: answering a `Future` from a
-  /// synchronous method is a runtime `TypeError`, and vice versa a sync
-  /// value can't satisfy an awaited `Future`.
   void _writeSuccessStub(
     StringBuffer b,
     String indent,
     String mockName,
     RepositoryMethodCall call,
     String? returnType,
-  ) {
-    b.writeln('${indent}when(() => $mockName.${call.invocationSource})');
+  ) =>
+      StubWriter.writeSuccessStub(b, indent, mockName, call, returnType);
 
-    final type = returnType?.trim();
-    if (type == null) {
-      // Unresolvable — assume the overwhelmingly common async case.
-      b.writeln('$indent    .thenAnswer((_) async => null);');
-    } else if (type.startsWith('Future<') ||
-        type.startsWith('FutureOr<') ||
-        type == 'Future' ||
-        type == 'FutureOr') {
-      b.writeln(
-          '$indent    .thenAnswer((_) async => ${MockValueGenerator.forReturnType(type)});');
-    } else if (type == 'void') {
-      b.writeln('$indent    .thenAnswer((_) {});');
-    } else if (type.startsWith('Stream<') || type == 'Stream') {
-      b.writeln('$indent    .thenAnswer((_) => const Stream.empty());');
-    } else {
-      b.writeln(
-          '$indent    .thenReturn(${MockValueGenerator.forReturnType(type)});');
-    }
-  }
-
-  /// Derives the absolute path to the domain repository interface file,
-  /// searching every feature folder on disk first — the dependency doesn't
-  /// have to live in the consuming notifier's own feature.
-  String _repositoryInterfacePath(RepositoryDep repo, NotifierInfo n) {
-    final snakeCase = _toSnakeCase(repo.type);
-    final featureName = _findActualFeatureFolder(snakeCase) ??
-        _extractFeatureName(n.importPath);
-    return p.join(
-      projectRoot,
-      'lib',
-      'features',
-      featureName,
-      'domain',
-      'repositories',
-      '$snakeCase.dart',
-    );
-  }
+  String _repositoryInterfacePath(RepositoryDep repo, NotifierInfo n) =>
+      _importResolver.repositoryInterfacePath(repo, n);
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -1066,102 +888,17 @@ class TestGenerator {
   bool _hasCallArgs(String expr) =>
       RegExp(r'^[a-zA-Z_][a-zA-Z0-9_]*\s*\(').hasMatch(expr.trim());
 
-  /// Whether mocktail's `any()` matcher needs `registerFallbackValue` for a
-  /// parameter of this type. Mocktail ships fallbacks for primitives and
-  /// core collections; nullable types fall back to `null` on their own.
-  bool _needsFallbackRegistration(String rawType) {
-    final type = rawType.trim();
-    if (type.isEmpty || type.endsWith('?')) return false;
-    const builtIn = {
-      'String',
-      'int',
-      'double',
-      'num',
-      'bool',
-      'dynamic',
-      'Object',
-      'void',
-    };
-    if (builtIn.contains(type)) return false;
-    final base = type.split('<').first.trim();
-    if (const {'List', 'Map', 'Set', 'Iterable'}.contains(base)) return false;
-    if (type.contains('Function') || type.contains('(')) return false;
-    return true;
-  }
+  bool _needsFallbackRegistration(String rawType) =>
+      StubWriter.needsFallbackRegistration(rawType);
 
-  /// Builds the `Arrange: inputs` declaration for one method parameter,
-  /// using `const` instead of `final` whenever the generated literal is
-  /// guaranteed to be a compile-time constant (satisfies
-  /// `prefer_const_declarations`). Types like `DateTime`, `Uri`, `Future`,
-  /// and custom `.empty()` factories aren't guaranteed const-constructible,
-  /// so those stay `final`.
-  String _inputDeclarationLine(ParamInfo param) {
-    final val = MockValueGenerator.forType(param.type);
-    if (!_isConstCompatible(param.type)) {
-      return 'final ${param.name} = $val;';
-    }
-    // Avoid a redundant nested `const` (e.g. `const foo = const [];`).
-    final cleanedVal =
-        val.startsWith('const ') ? val.substring('const '.length) : val;
-    return 'const ${param.name} = $cleanedVal;';
-  }
+  String _inputDeclarationLine(ParamInfo param) =>
+      StubWriter.inputDeclarationLine(param);
 
-  bool _isConstCompatible(String rawType) {
-    final type = rawType.replaceAll('?', '').trim();
-    if (type.startsWith('List<') || type == 'List') return true;
-    if (type.startsWith('Map<') || type == 'Map') return true;
-    if (type.startsWith('Set<') || type == 'Set') return true;
-    switch (type) {
-      case 'String':
-      case 'int':
-      case 'double':
-      case 'num':
-      case 'bool':
-      case 'Duration':
-      case 'dynamic':
-      case 'Object':
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  String _extractFeatureName(String importPath) {
-    final parts = importPath.split('/');
-    final featuresIdx = parts.indexOf('features');
-    if (featuresIdx >= 0 && featuresIdx + 1 < parts.length) {
-      return parts[featuresIdx + 1];
-    }
-    return '';
-  }
-
-  /// Every dependency worth mocking for [n]. A dependency reached via
-  /// `ref.read()`/`ref.watch()` is always mocked, since that call is itself
-  /// the DI seam the app relies on to substitute a fake in tests — this is
-  /// what covers raw SDK types (`FlutterSecureStorage`, `FirebaseAuth`, a
-  /// `Dio` client, ...) and other notifiers alike, regardless of their type
-  /// name. Dependencies found only as a plain class field (no provider
-  /// expression) fall back to a name-suffix heuristic.
-  List<RepositoryDep> _mockableDependencies(NotifierInfo n) => n.repositories
-      .where(
-          (r) => r.providerExpression != null || _looksLikeMockableName(r.type))
-      .toList();
-
-  bool _looksLikeMockableName(String type) {
-    final lower = type.toLowerCase();
-    return lower.endsWith('repository') ||
-        lower.endsWith('service') ||
-        lower.endsWith('datasource') ||
-        lower.endsWith('client') ||
-        lower.endsWith('api') ||
-        lower.endsWith('notifier') ||
-        lower.endsWith('cubit') ||
-        lower.endsWith('bloc') ||
-        lower.endsWith('viewmodel');
-  }
+  List<RepositoryDep> _mockableDependencies(NotifierInfo n) =>
+      DependencySelector.mockable(n);
 
   bool _isRepositorySuffix(String type) =>
-      type.toLowerCase().endsWith('repository');
+      ImportResolver.isRepositorySuffix(type);
 
   /// Riverpod `Notifier`/`AsyncNotifier` (and Bloc/Cubit) dependencies need
   /// their provider substituted via `overrideWith(() => instance)`, since
@@ -1181,21 +918,6 @@ class TestGenerator {
   /// (e.g. `pOnSuccess`, `pOnError`) without excluding real public methods
   /// that merely start with a lowercase `p` (`parse`, `publish`, `pay`, ...).
   bool _isInternalHelper(String name) => RegExp(r'^p[A-Z]').hasMatch(name);
-
-  /// Converts a class name to its conventional snake_case file name,
-  /// handling acronym runs correctly (`APIClient` → `api_client`,
-  /// `UserAPI` → `user_api`), which a per-capital split would mangle into
-  /// `a_p_i_client`.
-  String _toSnakeCase(String name) => name
-      .replaceAllMapped(
-        RegExp(r'([A-Z]+)([A-Z][a-z])'),
-        (m) => '${m.group(1)}_${m.group(2)}',
-      )
-      .replaceAllMapped(
-        RegExp(r'([a-z0-9])([A-Z])'),
-        (m) => '${m.group(1)}_${m.group(2)}',
-      )
-      .toLowerCase();
 }
 
 /// The result of the generator's single up-front analysis pass over one
