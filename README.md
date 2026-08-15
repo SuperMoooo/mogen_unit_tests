@@ -44,12 +44,23 @@ For every `Bloc`/`Cubit` it finds, the package creates a `bloc_test` file with:
 - a `starts in a valid initial state` test that constructs and closes the class, catching a constructor that throws
 - calls made by the constructor itself stubbed once in `setUp()` — the bloc analogue of a notifier's `build()`
 - two `blocTest`s per action: a success path (`verify:` asserts the collaborator was reached and the settled state) and an error path that stubs the action's own calls with `thenThrow(AppException.test())`
-- **state assertions read off the handler's own `emit(...)` calls.** A state class with the conventional fields is asserted field by field (`expect(bloc.state.error, isNull)`); a **sealed state hierarchy** — whose base class has no fields to check — is asserted by type instead, taken from the emit itself:
+- **state assertions read off the handler's own `emit(...)` calls.** Both state shapes are supported, and they are not alternatives — a project can use either, or both in the same state:
+
+    | Your state shape                                         | What gets asserted                           |
+    | -------------------------------------------------------- | -------------------------------------------- |
+    | Subtypes: `class FeatureSuccess extends FeatureState`    | `expect(bloc.state, isA<FeatureSuccess>());` |
+    | Fields: one class with `isLoading` / `error` / `success` | `expect(bloc.state.error, isNull);` …        |
+    | Both: a sealed base carrying shared fields               | both of the above, in that order             |
 
     ```dart
     // emit(SearchSuccess(results));           →  expect(bloc.state, isA<SearchSuccess>());
     // } catch (e) { emit(SearchFailure(e)); } →  expect(bloc.state, isA<SearchFailure>());
+    // emit(state.copyWith(error: e));         →  expect(bloc.state.error, isNotNull);
     ```
+
+    Fields are only read when the matched state class really is the bloc's declared state type — `bloc.state.error` doesn't compile when `error` lives on one subclass only.
+
+- the initial-state test asserts the class named in `super(...)`, so `super(SearchInitial())` gives `expect(bloc.state, isA<SearchInitial>())` rather than a tautology
 
 - an error path that adapts to the handler: when the handler catches the failure and turns it into state, the test asserts that state; when it doesn't, the error escapes to the bloc's error handler, so the test asserts `errors: () => [isA<AppException>()]` instead of a state the error never reaches
 - the **real** emitted sequence as a ready-to-uncomment `expect:` line — `// expect: () => [isA<SearchLoading>(), isA<SearchSuccess>()],`. It stays commented on purpose: an emit guarded by an `if`, or made in a loop, doesn't run as many times as it appears in source, and a wrong `expect:` list fails every run — while the settled-state assertion in `verify:` holds either way

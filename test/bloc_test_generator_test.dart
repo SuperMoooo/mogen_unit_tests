@@ -572,6 +572,152 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
     });
 
     test(
+        'asserts the emitted subtype AND the shared fields when a state does '
+        'both — a sealed base carrying isLoading/error/success whose subtypes '
+        'the handler emits', () {
+      final tempDir = Directory.systemTemp.createTempSync('mogen_bloc_gen_');
+      try {
+        final file = _write(tempDir, 'profile_bloc.dart', '''
+class ProfileBloc extends Bloc<ProfileEvent, ProfileState> {
+  ProfileBloc(this._profileRepository) : super(const ProfileInitial()) {
+    on<ProfileRequested>((event, emit) async {
+      try {
+        final name = await _profileRepository.loadName(event.userId);
+        emit(ProfileLoaded(name: name, success: 'loaded'));
+      } catch (e) {
+        emit(ProfileError(error: e.toString()));
+      }
+    });
+  }
+
+  final ProfileRepository _profileRepository;
+}
+''');
+
+        final output = generator.generate(NotifierInfo(
+          className: 'ProfileBloc',
+          sourceFilePath: file.path,
+          importPath:
+              'package:app/features/profile/presentation/bloc/profile_bloc.dart',
+          packageName: 'app',
+          stateType: 'ProfileState',
+          isAsync: false,
+          kind: StateManagementKind.bloc,
+          eventBaseType: 'ProfileEvent',
+          repositories: const [
+            RepositoryDep(
+                type: 'ProfileRepository', name: '_profileRepository'),
+          ],
+          constructorParams: const [
+            ParamInfo(name: '_profileRepository', type: 'ProfileRepository'),
+          ],
+          methods: const [],
+          events: const [EventInfo(type: 'ProfileRequested', isAsync: true)],
+          stateInfo: const StateInfo(
+            className: 'ProfileState',
+            importPath:
+                'package:app/features/profile/presentation/bloc/profile_bloc.dart',
+            isPart: true,
+            fields: [
+              StateField(name: 'isLoading', type: 'bool'),
+              StateField(name: 'error', type: 'String', isNullable: true),
+              StateField(name: 'success', type: 'String', isNullable: true),
+            ],
+          ),
+        ));
+
+        final successTest = output.substring(
+          output.indexOf("'ProfileRequested completes successfully'"),
+          output.indexOf("'ProfileRequested surfaces an error"),
+        );
+        // The shape...
+        expect(
+            successTest, contains('expect(bloc.state, isA<ProfileLoaded>());'));
+        // ...and the shared fields the base class really declares.
+        expect(successTest, contains('expect(bloc.state.isLoading, isFalse);'));
+        expect(successTest, contains('expect(bloc.state.error, isNull);'));
+        expect(successTest, contains('expect(bloc.state.success, isNotNull);'));
+
+        final errorTest = output
+            .substring(output.indexOf("'ProfileRequested surfaces an error"));
+        expect(errorTest, contains('expect(bloc.state, isA<ProfileError>());'));
+        expect(errorTest, contains('expect(bloc.state.error, isNotNull);'));
+
+        // `super(const ProfileInitial())` names the starting state, so the
+        // initial-state test is a real assertion rather than a tautology.
+        expect(
+          output,
+          contains('expect(bloc.state, isA<ProfileInitial>());'),
+        );
+
+        expect(output, isNot(contains('TODO(mogen_unit_tests)')));
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    test(
+        'does not read fields off the state when the matched state class is '
+        'not the declared one — a prefix match can land on a subclass whose '
+        'fields the base does not have', () {
+      final tempDir = Directory.systemTemp.createTempSync('mogen_bloc_gen_');
+      try {
+        final file = _write(tempDir, 'auth_bloc.dart', '''
+class AuthBloc extends Bloc<AuthEvent, AuthState> {
+  AuthBloc(this._authRepository) : super(AuthInitial()) {
+    on<LoginRequested>((event, emit) async {
+      try {
+        await _authRepository.login();
+        emit(AuthSuccess());
+      } catch (e) {
+        emit(AuthFailure(e.toString()));
+      }
+    });
+  }
+
+  final AuthRepository _authRepository;
+}
+''');
+
+        final bloc = _authBloc(file.path);
+        final output = generator.generate(NotifierInfo(
+          className: bloc.className,
+          sourceFilePath: bloc.sourceFilePath,
+          importPath: bloc.importPath,
+          packageName: bloc.packageName,
+          stateType: 'AuthState',
+          isAsync: false,
+          kind: StateManagementKind.bloc,
+          eventBaseType: bloc.eventBaseType,
+          repositories: bloc.repositories,
+          constructorParams: bloc.constructorParams,
+          methods: const [],
+          events: const [EventInfo(type: 'LoginRequested', isAsync: true)],
+          // The state scan matched `AuthFailureState`, a sibling of the
+          // declared `AuthState` — its `error` field exists only there.
+          stateInfo: const StateInfo(
+            className: 'AuthFailureState',
+            importPath:
+                'package:app/features/auth/presentation/bloc/auth_bloc.dart',
+            isPart: true,
+            fields: [
+              StateField(name: 'error', type: 'String', isNullable: true),
+            ],
+          ),
+        ));
+
+        // `bloc.state.error` wouldn't compile — `state` is statically the base
+        // `AuthState`, which declares no such field.
+        expect(output, isNot(contains('bloc.state.error')));
+        // The emitted subtypes are still asserted.
+        expect(output, contains('expect(bloc.state, isA<AuthSuccess>());'));
+        expect(output, contains('expect(bloc.state, isA<AuthFailure>());'));
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    test(
         'still falls back to a TODO when nothing in the handler names a '
         'concrete state type', () {
       final tempDir = Directory.systemTemp.createTempSync('mogen_bloc_gen_');

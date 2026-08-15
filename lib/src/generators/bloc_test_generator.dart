@@ -543,9 +543,14 @@ class BlocTestGenerator {
     if (stateType == null || stateType == 'dynamic') return;
 
     final sut = _actParam(n);
+    // `super(SearchInitial())` names the starting state, which makes this a
+    // real assertion instead of the tautology `isA<SearchState>()` would be.
+    final initial =
+        MethodCallDetector.detectInitialState(n.sourceFilePath) ?? stateType;
+
     b.writeln("    test('starts in a valid initial state', () async {");
     b.writeln('      final $sut = ${_buildFnName(n)}();');
-    b.writeln('      expect($sut.state, isA<$stateType>());');
+    b.writeln('      expect($sut.state, isA<$initial>());');
     b.writeln('      await $sut.close();');
     b.writeln('    });');
     b.writeln();
@@ -773,10 +778,21 @@ class BlocTestGenerator {
     }
   }
 
-  /// Asserts the settled state, using the same field-name conventions as the
-  /// Riverpod generator and only for fields the matched state class really
-  /// declares — a sealed bloc state (`AuthLoading`, `AuthFailure`, ...) has no
-  /// such fields, and gets a commented scaffold instead.
+  /// Asserts the settled state.
+  ///
+  /// Both state shapes are handled, and they are not alternatives — a project
+  /// can use either, or both at once:
+  ///
+  /// - **subtype**: the action emits a dedicated class (`emit(AuthSuccess(…))`,
+  ///   `emit(AuthFailure(…))`), asserted as
+  ///   `expect(bloc.state, isA&lt;AuthSuccess&gt;())`;
+  /// - **fields**: the state is one class carrying `isLoading`/`error`/
+  ///   `success`, asserted field by field, exactly as on the Riverpod side.
+  ///
+  /// A state that does both — a sealed base declaring shared fields, with the
+  /// action emitting a subtype — gets both assertions. Only fields declared on
+  /// the *matched* state class are read, since `bloc.state.error` doesn't
+  /// compile when `error` only exists on one subclass.
   void _writeStateAssertions(
     StringBuffer b,
     NotifierInfo n,
@@ -784,9 +800,20 @@ class BlocTestGenerator {
     required bool expectSuccess,
   }) {
     final sut = _actParam(n);
-    final stateInfo = n.stateInfo;
-    if (stateInfo == null || stateInfo.fields.isEmpty) {
-      _writeEmittedTypeAssertion(b, n, action, expectSuccess: expectSuccess);
+
+    // The shape first: which state class the action settled on.
+    final emittedType = expectSuccess
+        ? _successStateType(action, n)
+        : _errorStateType(action, n);
+    if (emittedType != null) {
+      b.writeln('          expect($sut.state, isA<$emittedType>());');
+    }
+
+    final stateInfo = _fieldBearingState(n);
+    if (stateInfo == null) {
+      if (emittedType == null) {
+        _writeStateTodo(b, n, sut);
+      }
       return;
     }
 
@@ -795,7 +822,7 @@ class BlocTestGenerator {
     const successFields = ['success', 'successMessage', 'message'];
 
     final names = stateInfo.fields.map((f) => f.name).toSet();
-    var asserted = false;
+    var asserted = emittedType != null;
 
     for (final field in loadingFields) {
       if (!names.contains(field)) continue;
@@ -824,35 +851,25 @@ class BlocTestGenerator {
     }
 
     if (!asserted) {
-      _writeEmittedTypeAssertion(b, n, action, expectSuccess: expectSuccess);
+      _writeStateTodo(b, n, sut);
     }
   }
 
-  /// Asserts the settled state by *type*, read straight off the action's own
-  /// `emit(...)` calls.
+  /// The matched state class, but only when its fields can be read off
+  /// `bloc.state` — that is, when it really is the bloc's declared state type.
   ///
-  /// This is what covers the sealed state hierarchy
-  /// (`AuthInitial`/`AuthSuccess`/`AuthFailure`), where the base class the
-  /// generator matched declares no fields to check but the handler names the
-  /// state it produces at every emit. Only a state type *more specific* than
-  /// the declared one is asserted — `isA<AuthState>()` on an `AuthState`
-  /// stream is trivially true and worth nothing.
-  void _writeEmittedTypeAssertion(
-    StringBuffer b,
-    NotifierInfo n,
-    _BlocAction action, {
-    required bool expectSuccess,
-  }) {
-    final sut = _actParam(n);
-    final emitted = expectSuccess
-        ? _successStateType(action, n)
-        : _errorStateType(action, n);
+  /// State matching falls back to a name-prefix search, which in a sealed
+  /// hierarchy can land on a *subclass* (`AuthSuccessState` for an `AuthBloc`).
+  /// Its fields belong to that subclass alone, so asserting them on
+  /// `bloc.state` — statically the base type — would not compile.
+  StateInfo? _fieldBearingState(NotifierInfo n) {
+    final stateInfo = n.stateInfo;
+    if (stateInfo == null || stateInfo.fields.isEmpty) return null;
+    if (n.stateType != null && stateInfo.className != n.stateType) return null;
+    return stateInfo;
+  }
 
-    if (emitted != null) {
-      b.writeln('          expect($sut.state, isA<$emitted>());');
-      return;
-    }
-
+  void _writeStateTodo(StringBuffer b, NotifierInfo n, String sut) {
     b.writeln(
         '          // TODO(mogen_unit_tests): assert the resulting state, e.g.');
     b.writeln(

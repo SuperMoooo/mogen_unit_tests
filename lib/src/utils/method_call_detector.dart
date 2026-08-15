@@ -203,6 +203,28 @@ class MethodCallDetector {
     }
   }
 
+  /// The state class a bloc/cubit starts in, read from the `super(...)` call
+  /// in its constructor (`SearchBloc(...) : super(SearchInitial())`).
+  ///
+  /// Returns `null` when the initial state isn't constructed inline — an
+  /// injected initial state, or a `super(_initial)` variable — in which case
+  /// there is no concrete type to assert.
+  static String? detectInitialState(String sourcePath) {
+    try {
+      final content = File(sourcePath).readAsStringSync();
+      final parsed = parseString(content: content, path: sourcePath);
+
+      final finder = _SuperInitializerFinder();
+      parsed.unit.visitChildren(finder);
+
+      final argument = finder.argument;
+      if (argument == null) return null;
+      return AstHelpers.constructedTypeName(argument);
+    } catch (_) {
+      return null;
+    }
+  }
+
   static FunctionBody? _methodBody(CompilationUnit unit, String methodName) {
     final finder = _MethodBodyFinder(methodName);
     unit.visitChildren(finder);
@@ -372,30 +394,26 @@ class _EmitVisitor extends RecursiveAstVisitor<void> {
         // Recorded before descending so nested expressions can't reorder the
         // emit sequence, which the generated `expect:` scaffold mirrors.
         emits.add(EmittedState(
-          typeName: _constructedTypeName(arg.toSource()),
+          typeName: AstHelpers.constructedTypeName(arg.toSource()),
           inCatch: _inCatch,
         ));
       }
     }
     super.visitMethodInvocation(node);
   }
+}
 
-  /// The class name an emitted expression constructs, or `null` when the
-  /// expression isn't a construction at all.
-  ///
-  /// Parsed source is unresolved, so `AuthSuccess(user)` arrives as a method
-  /// invocation and `const AuthFailure('x')` as an instance creation — a
-  /// leading capitalised identifier is what both have in common.
-  String? _constructedTypeName(String source) {
-    var expression = source.trim();
-    for (final keyword in const ['const ', 'new ']) {
-      if (expression.startsWith(keyword)) {
-        expression = expression.substring(keyword.length).trim();
-      }
+/// Finds the first argument of a constructor's `super(...)` initializer —
+/// where a bloc or cubit declares the state it starts in.
+class _SuperInitializerFinder extends RecursiveAstVisitor<void> {
+  String? argument;
+
+  @override
+  void visitSuperConstructorInvocation(SuperConstructorInvocation node) {
+    if (argument == null) {
+      argument = AstHelpers.firstArgument(node.argumentList)?.toSource();
     }
-    final match =
-        RegExp(r'^([A-Z][A-Za-z0-9_]*)\s*[(.]').firstMatch(expression);
-    return match?.group(1);
+    super.visitSuperConstructorInvocation(node);
   }
 }
 

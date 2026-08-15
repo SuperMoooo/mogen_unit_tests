@@ -43,6 +43,29 @@ class AstHelpers {
 
   /// Whether the function [body] is declared `async` / `async*`.
   static bool isAsyncBody(FunctionBody body) => body.keyword?.lexeme == 'async';
+
+  /// The class name an expression constructs, or `null` when the expression
+  /// isn't a construction at all.
+  ///
+  /// This is what turns `emit(AuthSuccess(user))` into `AuthSuccess` and
+  /// `super(const AuthInitial())` into `AuthInitial`, while
+  /// `emit(state.copyWith(...))` and `emit(next)` correctly yield `null` —
+  /// nothing there names a state class.
+  ///
+  /// Parsed source is unresolved, so `AuthSuccess(user)` arrives as a method
+  /// invocation while `const AuthFailure('x')` arrives as an instance
+  /// creation; a leading capitalised identifier is what both have in common.
+  static String? constructedTypeName(String source) {
+    var expression = source.trim();
+    for (final keyword in const ['const ', 'new ']) {
+      if (expression.startsWith(keyword)) {
+        expression = expression.substring(keyword.length).trim();
+      }
+    }
+    final match =
+        RegExp(r'^([A-Z][A-Za-z0-9_]*)\s*[(.]').firstMatch(expression);
+    return match?.group(1);
+  }
 }
 
 class _FunctionExpressionFinder extends GeneralizingAstVisitor<void> {

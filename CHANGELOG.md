@@ -1,3 +1,9 @@
+# [1.4.2]
+
+- The initial-state test asserts the class named in `super(...)`
+  (`super(SearchInitial())` → `isA<SearchInitial>()`) instead of the base state
+  type, which was trivially true.
+
 # [1.4.1]
 
 ## Fixed
@@ -6,6 +12,13 @@
   now detected alongside Riverpod notifiers, and get tests built on the
   `bloc_test` package (`blocTest<B, S>(...)` with `build:`, `act:`, `setUp:`,
   `verify:` and `errors:`).
+- Both bloc state shapes are asserted, instead of one excluding the other: a
+  state expressed as subtypes (`class FeatureSuccess extends FeatureState`) is
+  asserted by type, a state expressed as fields (`isLoading`/`error`/`success`)
+  field by field, and a state that does both gets both assertions.
+- Fields are no longer read off `bloc.state` when the matched state class isn't
+  the bloc's declared state type — the name-prefix fallback can match a
+  subclass, whose fields the base type doesn't declare and wouldn't compile.
 
 # [1.4.0]
 
