@@ -34,12 +34,19 @@ import 'generator_support.dart';
 ///
 /// Assertion strategy
 /// ──────────────────
-/// The emitted-state *sequence* can't be known from source without executing
-/// the bloc, and a wrong `expect:` list fails every run — so the generated
-/// test asserts the settled state in `verify:` (plus the dependency
-/// interaction) and leaves a commented `expect:` scaffold for the exact
-/// sequence. State fields are only asserted when the matched state class
-/// actually declares them, exactly as on the Riverpod side.
+/// What the action does to the state is read off its own `emit(...)` calls:
+///
+/// - a state class with the conventional fields (`isLoading`, `error`,
+///   `success`) is asserted field by field, exactly as on the Riverpod side;
+/// - a sealed state hierarchy has no such fields on its base class, so the
+///   settled state is asserted *by type* instead — `emit(AuthSuccess(...))`
+///   becomes `expect(bloc.state, isA<AuthSuccess>())`, and the emit inside the
+///   handler's `catch` becomes the error test's assertion.
+///
+/// Only the state *sequence* stays commented out: emits guarded by an `if`, or
+/// made in a loop, don't run as many times as they appear in source, and a
+/// wrong `expect:` list fails every run. The comment is still the real
+/// sequence, ready to uncomment once the guards are checked.
 class BlocTestGenerator {
   /// Creates a generator. [projectRoot] is needed to locate dependency source
   /// files for signature resolution, [notifierIndex] maps every logic class in
@@ -185,6 +192,20 @@ class BlocTestGenerator {
         final leaf = MockValueGenerator.extractCustomType(param.type);
         if (leaf != null) imports.add(_resolver.typeImport(leaf, n));
       }
+
+      // A state class asserted by type (`isA<AuthSuccess>()`) has to be in
+      // scope. Sealed state subclasses usually live in the bloc's own library,
+      // which the bloc import already covers — the registry says which.
+      for (final type in [
+        _successStateType(action, n),
+        _errorStateType(action, n),
+      ]) {
+        if (type == null) continue;
+        final declared = eventRegistry[type];
+        if (declared == null || declared.isPart) continue;
+        if (declared.importPath == n.importPath) continue;
+        imports.add("import '${declared.importPath}';");
+      }
     }
     for (final dep in dependencies) {
       for (final call
@@ -238,6 +259,10 @@ class BlocTestGenerator {
                 isEvent: true,
                 bodySource: e.handlerBodySource,
                 params: eventRegistry[e.type]?.params ?? const [],
+                emits: MethodCallDetector.detectEmittedStates(
+                  n.sourceFilePath,
+                  eventType: e.type,
+                ),
               ))
           .toList();
     }
@@ -250,8 +275,39 @@ class BlocTestGenerator {
               bodySource: m.bodySource,
               params: m.params,
               method: m,
+              emits: MethodCallDetector.detectEmittedStates(
+                n.sourceFilePath,
+                methodName: m.name,
+              ),
             ))
         .toList();
+  }
+
+  /// The state class the action emits on its happy path, when that class is
+  /// something more specific than the declared state type — the sealed-state
+  /// shape (`emit(AuthSuccess(...))`), where asserting the base type would be
+  /// trivially true.
+  String? _successStateType(_BlocAction action, NotifierInfo n) =>
+      _lastEmittedType(action, n, inCatch: false);
+
+  /// The state class the action emits from its `catch` block.
+  String? _errorStateType(_BlocAction action, NotifierInfo n) =>
+      _lastEmittedType(action, n, inCatch: true);
+
+  String? _lastEmittedType(
+    _BlocAction action,
+    NotifierInfo n, {
+    required bool inCatch,
+  }) {
+    String? found;
+    for (final emit in action.emits) {
+      if (emit.inCatch != inCatch) continue;
+      final type = emit.typeName;
+      if (type == null || type == n.stateType) continue;
+      // The settled state is whatever was emitted last on that path.
+      found = type;
+    }
+    return found;
   }
 
   /// Resolves the declared signature of a dependency method. Repository
@@ -549,10 +605,7 @@ class BlocTestGenerator {
     b.writeln('        build: ${_buildFnName(n)},');
     b.writeln(
         '        act: (${_actParam(n)}) => ${_actExpression(action, n)},');
-    b.writeln(
-        '        // Add an `expect:` list here to assert the exact sequence of');
-    b.writeln('        // emitted states, e.g. `expect: () => [isA<'
-        '${n.stateType ?? 'Object'}>()],`.');
+    _writeExpectScaffold(b, action, n);
     b.writeln('        verify: (${_actParam(n)}) {');
     _writeCallVerifications(b, action, plan);
     _writeStateAssertions(b, n, action, expectSuccess: true);
@@ -601,9 +654,44 @@ class BlocTestGenerator {
   /// An unknown body (nothing captured) gets the benefit of the doubt, the
   /// same convention the Riverpod generator uses for its heuristics.
   bool _catchesErrors(_BlocAction action) {
+    // An emit from inside a `catch` is proof, not a guess.
+    if (action.emits.any((e) => e.inCatch)) return true;
     final body = action.bodySource;
     if (body == null) return true;
     return body.contains('catch') || body.contains('onError');
+  }
+
+  /// Writes the commented `expect:` scaffold for the success path.
+  ///
+  /// When the handler's emits name concrete state classes, the comment is the
+  /// real sequence, ready to uncomment. It stays commented on purpose: emits
+  /// guarded by an `if`, or made in a loop, don't happen the number of times
+  /// they appear in source, and a wrong `expect:` list fails every single run
+  /// — whereas the settled-state assertion in `verify:` holds either way.
+  void _writeExpectScaffold(
+    StringBuffer b,
+    _BlocAction action,
+    NotifierInfo n,
+  ) {
+    final sequence = action.emits
+        .where((e) => !e.inCatch)
+        .map((e) => e.typeName ?? n.stateType ?? 'Object')
+        .toList();
+    final namesAConcreteType = action.emits
+        .any((e) => e.typeName != null && e.typeName != n.stateType);
+
+    b.writeln(
+        '        // Uncomment to assert the exact sequence of emitted states');
+    b.writeln(
+        '        // (check the guards first — a conditional emit doesn\'t '
+        'always run):');
+    if (sequence.isEmpty || !namesAConcreteType) {
+      b.writeln('        // expect: () => [isA<'
+          '${n.stateType ?? 'Object'}>()],');
+      return;
+    }
+    final matchers = sequence.map((type) => 'isA<$type>()').join(', ');
+    b.writeln('        // expect: () => [$matchers],');
   }
 
   /// The calls an action makes that the constructor doesn't already make.
@@ -698,10 +786,7 @@ class BlocTestGenerator {
     final sut = _actParam(n);
     final stateInfo = n.stateInfo;
     if (stateInfo == null || stateInfo.fields.isEmpty) {
-      b.writeln(
-          '          // TODO(mogen_unit_tests): assert the resulting state, e.g.');
-      b.writeln(
-          '          // expect($sut.state, isA<${n.stateType ?? 'Object'}>());');
+      _writeEmittedTypeAssertion(b, n, action, expectSuccess: expectSuccess);
       return;
     }
 
@@ -739,11 +824,39 @@ class BlocTestGenerator {
     }
 
     if (!asserted) {
-      b.writeln(
-          '          // TODO(mogen_unit_tests): assert the resulting state, e.g.');
-      b.writeln(
-          '          // expect($sut.state, isA<${n.stateType ?? 'Object'}>());');
+      _writeEmittedTypeAssertion(b, n, action, expectSuccess: expectSuccess);
     }
+  }
+
+  /// Asserts the settled state by *type*, read straight off the action's own
+  /// `emit(...)` calls.
+  ///
+  /// This is what covers the sealed state hierarchy
+  /// (`AuthInitial`/`AuthSuccess`/`AuthFailure`), where the base class the
+  /// generator matched declares no fields to check but the handler names the
+  /// state it produces at every emit. Only a state type *more specific* than
+  /// the declared one is asserted — `isA<AuthState>()` on an `AuthState`
+  /// stream is trivially true and worth nothing.
+  void _writeEmittedTypeAssertion(
+    StringBuffer b,
+    NotifierInfo n,
+    _BlocAction action, {
+    required bool expectSuccess,
+  }) {
+    final sut = _actParam(n);
+    final emitted = expectSuccess
+        ? _successStateType(action, n)
+        : _errorStateType(action, n);
+
+    if (emitted != null) {
+      b.writeln('          expect($sut.state, isA<$emitted>());');
+      return;
+    }
+
+    b.writeln(
+        '          // TODO(mogen_unit_tests): assert the resulting state, e.g.');
+    b.writeln(
+        '          // expect($sut.state, isA<${n.stateType ?? 'Object'}>());');
   }
 
   bool _mentions(_BlocAction action, String identifier) {
@@ -794,6 +907,7 @@ class _BlocAction {
     this.bodySource,
     this.params = const [],
     this.method,
+    this.emits = const [],
   });
 
   /// The event class name, or the cubit method name.
@@ -810,6 +924,9 @@ class _BlocAction {
 
   /// The cubit method behind this action, when [isEvent] is `false`.
   final MethodInfo? method;
+
+  /// The states this action emits, in source order.
+  final List<EmittedState> emits;
 }
 
 /// The result of the generator's up-front analysis pass over one bloc/cubit.

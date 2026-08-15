@@ -153,6 +153,62 @@ class MethodCallDetector {
     }
   }
 
+  /// Extracts the states a bloc/cubit action emits, in source order.
+  ///
+  /// A bloc names the state it produces right at the `emit(...)` call, so the
+  /// generated test doesn't have to guess it: `emit(AuthSuccess(user))` in the
+  /// happy path and `emit(AuthFailure(e))` inside the `catch` tell the
+  /// generator exactly what to assert — which is what makes real assertions
+  /// possible for sealed state hierarchies, whose base class declares no
+  /// fields to check.
+  ///
+  /// Pass [eventType] for a bloc event handler, or [methodName] for a cubit
+  /// method.
+  static List<EmittedState> detectEmittedStates(
+    String sourcePath, {
+    String? eventType,
+    String? methodName,
+  }) {
+    try {
+      final content = File(sourcePath).readAsStringSync();
+      final parsed = parseString(content: content, path: sourcePath);
+
+      AstNode? root;
+      if (eventType != null) {
+        final finder = _EventHandlerFinder(eventType);
+        parsed.unit.visitChildren(finder);
+
+        final handler = finder.handler;
+        if (handler == null) return [];
+
+        final closure = AstHelpers.firstFunctionExpression(handler);
+        if (closure != null) {
+          root = closure.body;
+        } else {
+          final source = handler.toSource().trim();
+          if (!AstHelpers.isIdentifier(source)) return [];
+          root = _methodBody(parsed.unit, source);
+        }
+      } else if (methodName != null) {
+        root = _methodBody(parsed.unit, methodName);
+      }
+
+      if (root == null) return [];
+
+      final visitor = _EmitVisitor();
+      root.visitChildren(visitor);
+      return visitor.emits;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static FunctionBody? _methodBody(CompilationUnit unit, String methodName) {
+    final finder = _MethodBodyFinder(methodName);
+    unit.visitChildren(finder);
+    return finder.body;
+  }
+
   /// Backwards-compatible helper for callers that only need method names.
   static List<String> detectRepositoryMethods(
     String notifierSourcePath,
@@ -274,7 +330,90 @@ class _TypeAnnotationFinder extends GeneralizingAstVisitor<void> {
   }
 }
 
+/// One `emit(...)` call found inside a bloc handler or cubit method.
+class EmittedState {
+  /// Creates a record of one emitted state.
+  const EmittedState({this.typeName, required this.inCatch});
+
+  /// The state class being constructed, e.g. `AuthSuccess`.
+  ///
+  /// `null` when the emitted expression isn't a direct construction — the
+  /// `emit(state.copyWith(...))` shape of a data-class state, or a local
+  /// variable — in which case the state type is unchanged and the generator
+  /// asserts fields rather than a type.
+  final String? typeName;
+
+  /// Whether this emit sits inside a `catch` clause, i.e. it is the state the
+  /// action produces when its work fails.
+  final bool inCatch;
+}
+
 // ─── Bloc handler / constructor finders ──────────────────────────────────────
+
+/// Collects `emit(...)` calls in source order, tracking which ones are the
+/// action's failure path.
+class _EmitVisitor extends RecursiveAstVisitor<void> {
+  final List<EmittedState> emits = [];
+  bool _inCatch = false;
+
+  @override
+  void visitCatchClause(CatchClause node) {
+    final wasInCatch = _inCatch;
+    _inCatch = true;
+    super.visitCatchClause(node);
+    _inCatch = wasInCatch;
+  }
+
+  @override
+  void visitMethodInvocation(MethodInvocation node) {
+    if (node.methodName.name == 'emit') {
+      final arg = AstHelpers.firstArgument(node.argumentList);
+      if (arg != null) {
+        // Recorded before descending so nested expressions can't reorder the
+        // emit sequence, which the generated `expect:` scaffold mirrors.
+        emits.add(EmittedState(
+          typeName: _constructedTypeName(arg.toSource()),
+          inCatch: _inCatch,
+        ));
+      }
+    }
+    super.visitMethodInvocation(node);
+  }
+
+  /// The class name an emitted expression constructs, or `null` when the
+  /// expression isn't a construction at all.
+  ///
+  /// Parsed source is unresolved, so `AuthSuccess(user)` arrives as a method
+  /// invocation and `const AuthFailure('x')` as an instance creation — a
+  /// leading capitalised identifier is what both have in common.
+  String? _constructedTypeName(String source) {
+    var expression = source.trim();
+    for (final keyword in const ['const ', 'new ']) {
+      if (expression.startsWith(keyword)) {
+        expression = expression.substring(keyword.length).trim();
+      }
+    }
+    final match =
+        RegExp(r'^([A-Z][A-Za-z0-9_]*)\s*[(.]').firstMatch(expression);
+    return match?.group(1);
+  }
+}
+
+/// Finds the body of the method declaration named [methodName].
+class _MethodBodyFinder extends RecursiveAstVisitor<void> {
+  _MethodBodyFinder(this.methodName);
+
+  final String methodName;
+  FunctionBody? body;
+
+  @override
+  void visitMethodDeclaration(MethodDeclaration node) {
+    if (body == null && node.name.lexeme == methodName) {
+      body = node.body;
+    }
+    super.visitMethodDeclaration(node);
+  }
+}
 
 /// Finds the handler argument of the `on<EventType>(...)` registration for a
 /// specific event type.

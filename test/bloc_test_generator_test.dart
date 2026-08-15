@@ -498,7 +498,82 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       }
     });
 
-    test('leaves a TODO instead of asserting fields a sealed state lacks', () {
+    test(
+        'asserts a sealed state by the type the handler emits, and offers the '
+        'real emit sequence as a ready-to-uncomment expect: list', () {
+      final tempDir = Directory.systemTemp.createTempSync('mogen_bloc_gen_');
+      try {
+        final file = _write(tempDir, 'search_bloc.dart', '''
+class SearchBloc extends Bloc<SearchEvent, SearchState> {
+  SearchBloc(this._searchRepository) : super(SearchInitial()) {
+    on<QuerySubmitted>((event, emit) async {
+      emit(SearchLoading());
+      try {
+        final results = await _searchRepository.search(event.query);
+        emit(SearchSuccess(results));
+      } catch (e) {
+        emit(SearchFailure(e.toString()));
+      }
+    });
+  }
+
+  final SearchRepository _searchRepository;
+}
+''');
+
+        final output = generator.generate(NotifierInfo(
+          className: 'SearchBloc',
+          sourceFilePath: file.path,
+          importPath:
+              'package:app/features/search/presentation/bloc/search_bloc.dart',
+          packageName: 'app',
+          stateType: 'SearchState',
+          isAsync: false,
+          kind: StateManagementKind.bloc,
+          eventBaseType: 'SearchEvent',
+          repositories: const [
+            RepositoryDep(type: 'SearchRepository', name: '_searchRepository'),
+          ],
+          constructorParams: const [
+            ParamInfo(name: '_searchRepository', type: 'SearchRepository'),
+          ],
+          methods: const [],
+          events: const [EventInfo(type: 'QuerySubmitted', isAsync: true)],
+          // A sealed hierarchy: the base class declares no fields to assert.
+          stateInfo: const StateInfo(
+            className: 'SearchState',
+            importPath:
+                'package:app/features/search/presentation/bloc/search_bloc.dart',
+            isPart: true,
+            fields: [],
+          ),
+        ));
+
+        // The handler names the state it produces at every emit, so the
+        // settled state is asserted for real instead of left as a TODO.
+        expect(output, contains('expect(bloc.state, isA<SearchSuccess>());'));
+        expect(output, contains('expect(bloc.state, isA<SearchFailure>());'));
+        expect(output, isNot(contains('TODO(mogen_unit_tests)')));
+
+        // The sequence stays commented — a guarded emit doesn't always run —
+        // but it is the real one, not a placeholder.
+        expect(
+          output,
+          contains(
+              '// expect: () => [isA<SearchLoading>(), isA<SearchSuccess>()],'),
+        );
+
+        // An emit from inside the catch proves the handler converts the
+        // failure into state, so the error test asserts state, not `errors:`.
+        expect(output, isNot(contains('errors: () =>')));
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    test(
+        'still falls back to a TODO when nothing in the handler names a '
+        'concrete state type', () {
       final tempDir = Directory.systemTemp.createTempSync('mogen_bloc_gen_');
       try {
         final file = _write(tempDir, 'auth_bloc.dart', '''
